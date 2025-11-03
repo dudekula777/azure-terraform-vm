@@ -22,56 +22,71 @@ jobs:
     environment: dev
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # Step 1: Checkout repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: '1.6.6'
-        terraform_wrapper: false
+      # Step 2: Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.6'
+          terraform_wrapper: false
 
-    - name: Azure Login (Service Principal)
-      uses: azure/login@v2
-      with:
-        auth-type: SERVICE_PRINCIPAL
-        client-id: ${{ secrets.ARM_CLIENT_ID }}
-        tenant-id: ${{ secrets.ARM_TENANT_ID }}
-        subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-        client-secret: ${{ secrets.ARM_CLIENT_SECRET }}
+      # Step 3: Login to Azure using Service Principal (Client Secret)
+      - name: Azure Login (Service Principal)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.ARM_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.ARM_TENANT_ID }}"
+            }
 
-    - name: Verify Azure Login
-      run: |
-        echo "✅ Azure CLI Version:"
-        az --version
-        echo "🔑 Active Subscription:"
-        az account show
+      # Step 4: Verify Azure Login
+      - name: Verify Azure Login
+        run: |
+          echo "✅ Azure CLI Version:"
+          az --version
+          echo "🔑 Active Subscription:"
+          az account show
 
-    - name: Terraform Init
-      run: terraform init -input=false
-      working-directory: ${{ env.TF_WORKING_DIR }}
+      # Step 5: Terraform Format Check
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
-    - name: Terraform Validate
-      run: terraform validate -no-color
-      working-directory: ${{ env.TF_WORKING_DIR }}
+      # Step 6: Terraform Init
+      - name: Terraform Init
+        run: terraform init -input=false
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
-    - name: Terraform Plan
-      run: |
-        terraform plan -input=false -no-color \
-          -var "subscription_id=${{ env.ARM_SUBSCRIPTION_ID }}" \
-          -var "tenant_id=${{ env.ARM_TENANT_ID }}" \
-          -var "client_id=${{ env.ARM_CLIENT_ID }}" \
-          -var "client_secret=${{ env.ARM_CLIENT_SECRET }}" \
-          -var-file="terraform.tfvars" -out=tfplan
-      working-directory: ${{ env.TF_WORKING_DIR }}
+      # Step 7: Terraform Validate
+      - name: Terraform Validate
+        run: terraform validate -no-color
+        working-directory: ${{ env.TF_WORKING_DIR }}
 
-    - name: Terraform Apply (main branch only)
-      if: github.ref == 'refs/heads/main'
-      run: |
-        terraform apply -auto-approve -input=false \
-          -var "subscription_id=${{ env.ARM_SUBSCRIPTION_ID }}" \
-          -var "tenant_id=${{ env.ARM_TENANT_ID }}" \
-          -var "client_id=${{ env.ARM_CLIENT_ID }}" \
-          -var "client_secret=${{ env.ARM_CLIENT_SECRET }}" \
-          -var-file="terraform.tfvars"
-      working-directory: ${{ env.TF_WORKING_DIR }}
+      # Step 8: Terraform Plan
+      - name: Terraform Plan
+        run: |
+          terraform plan -input=false -no-color \
+            -var "subscription_id=${{ env.ARM_SUBSCRIPTION_ID }}" \
+            -var "tenant_id=${{ env.ARM_TENANT_ID }}" \
+            -var "client_id=${{ env.ARM_CLIENT_ID }}" \
+            -var "client_secret=${{ env.ARM_CLIENT_SECRET }}" \
+            -var-file="terraform.tfvars" -out=tfplan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      # Step 9: Terraform Apply (only for main branch)
+      - name: Terraform Apply (main branch only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          terraform apply -auto-approve -input=false \
+            -var "subscription_id=${{ env.ARM_SUBSCRIPTION_ID }}" \
+            -var "tenant_id=${{ env.ARM_TENANT_ID }}" \
+            -var "client_id=${{ env.ARM_CLIENT_ID }}" \
+            -var "client_secret=${{ env.ARM_CLIENT_SECRET }}" \
+            -var-file="terraform.tfvars"
+        working-directory: ${{ env.TF_WORKING_DIR }}
