@@ -19,6 +19,7 @@ jobs:
       TF_WORKING_DIR: ./environments/dev
       AZURE_RESOURCE_GROUP: rg-dev-vm
       VM_NAME: dev-vm-instance
+      LOCATION: eastus
 
     steps:
       # ✅ Checkout Code
@@ -44,17 +45,28 @@ jobs:
       - name: Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
-      # ✅ Import Existing Resource Group if it Exists
-      - name: Check and Import Existing Resource Group
+      # ✅ Import Existing Resources if Present
+      - name: Import Existing Azure Resources
         run: |
-          echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists..."
+          echo "🔍 Checking for existing Azure resources..."
+
+          # --- Resource Group ---
           if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
             echo "✅ Resource Group exists. Importing into Terraform state..."
             terraform -chdir=$TF_WORKING_DIR import \
               azurerm_resource_group.main \
               "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
           else
-            echo "ℹ️ Resource Group not found. Terraform will create it."
+            echo "ℹ️ Resource Group not found. It will be created by Terraform."
+          fi
+
+          # --- Virtual Machine ---
+          VM_ID=$(az vm show --name $VM_NAME --resource-group $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} --query id -o tsv 2>/dev/null || true)
+          if [ -n "$VM_ID" ]; then
+            echo "✅ VM '$VM_NAME' exists. Importing into Terraform state..."
+            terraform -chdir=$TF_WORKING_DIR import azurerm_linux_virtual_machine.main "$VM_ID" || true
+          else
+            echo "ℹ️ VM not found. It will be created by Terraform."
           fi
 
       # ✅ Terraform Validate
