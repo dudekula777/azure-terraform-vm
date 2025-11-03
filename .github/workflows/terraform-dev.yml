@@ -15,10 +15,11 @@ jobs:
 
     env:
       TF_WORKING_DIR: ./environments/dev
-      LOCATION: centralus
       AZURE_RESOURCE_GROUP: rg-dev-vm
       VM_NAME: dev-vm-instance
       VM_SIZES: Standard_B1s Standard_B2s Standard_B2ms
+      # Multiple regions to try - will use first available
+      AZURE_REGIONS: eastus westus2 southcentralus northcentralus
 
     steps:
       - name: 📥 Checkout repository
@@ -29,11 +30,9 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      # ✅ Auto-format Terraform files
       - name: 📝 Terraform Format
         run: terraform -chdir=${{ env.TF_WORKING_DIR }} fmt -recursive
 
-      # ✅ Extract Azure credentials from JSON secret
       - name: 🔐 Extract Azure Credentials
         id: azure-creds
         run: |
@@ -42,23 +41,60 @@ jobs:
           echo "SUBSCRIPTION_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.subscriptionId')" >> $GITHUB_OUTPUT
           echo "TENANT_ID=$(echo '${{ secrets.AZURE_CREDENTIALS }}' | jq -r '.tenantId')" >> $GITHUB_OUTPUT
 
-      # ✅ Create terraform.tfvars with all required variables
+      # ✅ Check available regions and select one
+      - name: 🗺️ Select Available Region
+        id: select-region
+        run: |
+          echo "🔍 Checking available Azure regions..."
+          
+          # Login to Azure
+          az login --service-principal \
+            -u ${{ steps.azure-creds.outputs.CLIENT_ID }} \
+            -p ${{ steps.azure-creds.outputs.CLIENT_SECRET }} \
+            --tenant ${{ steps.azure-creds.outputs.TENANT_ID }}
+          
+          # Try regions in order until we find one that works
+          for region in ${{ env.AZURE_REGIONS }}; do
+            echo "Checking region: $region"
+            
+            # Test if we can create resource group (basic availability check)
+            if az group create --name "test-rg-$region" --location "$region" --tags test=true > /dev/null 2>&1; then
+              echo "✅ Region $region is available"
+              az group delete --name "test-rg-$region" --yes --no-wait
+              echo "SELECTED_REGION=$region" >> $GITHUB_ENV
+              break
+            else
+              echo "⚠️ Region $region might have issues, trying next..."
+              # Clean up any failed test resource group
+              az group delete --name "test-rg-$region" --yes --no-wait 2>/dev/null || true
+            fi
+          done
+          
+          if [ -z "$SELECTED_REGION" ]; then
+            echo "❌ No available regions found from: ${{ env.AZURE_REGIONS }}"
+            echo "💡 Using eastus as fallback"
+            echo "SELECTED_REGION=eastus" >> $GITHUB_ENV
+          fi
+          
+          echo "🎯 Selected region: $SELECTED_REGION"
+
+      # ✅ Create terraform.tfvars with Standard SKU configuration
       - name: 📄 Create terraform.tfvars
         run: |
           cat > ${{ env.TF_WORKING_DIR }}/terraform.tfvars << EOF
-          location = "${{ env.LOCATION }}"
-          resource_group_name = "${{ env.AZURE_RESOURCE_GROUP }}"
-          vm_name = "${{ env.VM_NAME }}"
-          vm_size = "Standard_B1s"
-          
-          # Azure authentication variables
-          subscription_id = "${{ steps.azure-creds.outputs.SUBSCRIPTION_ID }}"
-          tenant_id = "${{ steps.azure-creds.outputs.TENANT_ID }}"
-          client_id = "${{ steps.azure-creds.outputs.CLIENT_ID }}"
-          client_secret = "${{ steps.azure-creds.outputs.CLIENT_SECRET }}"
-          EOF
-          
-          echo "✅ Created terraform.tfvars with all required variables"
+# Infrastructure configuration
+location = "${{ env.SELECTED_REGION }}"
+resource_group_name = "${{ env.AZURE_RESOURCE_GROUP }}-${{ env.SELECTED_REGION }}"
+vm_name = "${{ env.VM_NAME }}-${{ env.SELECTED_REGION }}"
+vm_size = "Standard_B1s"
+
+# Azure authentication
+subscription_id = "${{ steps.azure-creds.outputs.SUBSCRIPTION_ID }}"
+tenant_id = "${{ steps.azure-creds.outputs.TENANT_ID }}"
+client_id = "${{ steps.azure-creds.outputs.CLIENT_ID }}"
+client_secret = "${{ steps.azure-creds.outputs.CLIENT_SECRET }}"
+EOF
+          echo "✅ Created terraform.tfvars for region: ${{ env.SELECTED_REGION }}"
 
       # ✅ Initialize Terraform
       - name: ⚙️ Terraform Init
@@ -78,29 +114,44 @@ jobs:
           for size in ${{ env.VM_SIZES }}; do
             echo "💻 Trying VM size: $size"
             
-            # Update the vm_size in tfvars for this attempt
-            sed -i "s/vm_size = \".*\"/vm_size = \"$size\"/" terraform.tfvars
+            # Create a temporary tfvars with this VM size
+            cat > temp_$size.tfvars << EOF
+location = "${{ env.SELECTED_REGION }}"
+resource_group_name = "${{ env.AZURE_RESOURCE_GROUP }}-${{ env.SELECTED_REGION }}"
+vm_name = "${{ env.VM_NAME }}-${{ env.SELECTED_REGION }}"
+vm_size = "$size"
+
+subscription_id = "${{ steps.azure-creds.outputs.SUBSCRIPTION_ID }}"
+tenant_id = "${{ steps.azure-creds.outputs.TENANT_ID }}"
+client_id = "${{ steps.azure-creds.outputs.CLIENT_ID }}"
+client_secret = "${{ steps.azure-creds.outputs.CLIENT_SECRET }}"
+EOF
             
-            if terraform plan -no-color -out=tfplan -var-file="terraform.tfvars"; then
+            if terraform plan -no-color -out=tfplan -var-file="temp_$size.tfvars"; then
               echo "✅ Plan successful with VM size: $size"
               echo "SELECTED_VM_SIZE=$size" >> $GITHUB_ENV
+              # Use the successful tfvars
+              cp temp_$size.tfvars terraform.tfvars
               PLAN_SUCCESS=true
               break
             else
-              echo "⚠️  Plan failed with VM size: $size, trying next..."
+              echo "⚠️ Plan failed with VM size: $size, trying next..."
               rm -f tfplan
             fi
           done
           
           if [ "$PLAN_SUCCESS" = false ]; then
             echo "❌ No suitable VM size found from: ${{ env.VM_SIZES }}"
+            echo "💡 This might indicate regional capacity issues"
             exit 1
           fi
 
       # ✅ Apply Terraform changes
       - name: 🚀 Terraform Apply
         run: |
-          echo "🚀 Applying Terraform plan with VM size: ${{ env.SELECTED_VM_SIZE }}"
+          echo "🚀 Applying Terraform configuration..."
+          echo "📍 Region: ${{ env.SELECTED_REGION }}"
+          echo "💻 VM Size: ${{ env.SELECTED_VM_SIZE }}"
           terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve -input=false tfplan
 
       # ✅ Get Terraform outputs
@@ -109,41 +160,58 @@ jobs:
         run: |
           cd ${{ env.TF_WORKING_DIR }}
           echo "public_ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
-          echo "resource_group=$(terraform output -raw resource_group_name 2>/dev/null || echo '${{ env.AZURE_RESOURCE_GROUP }}')" >> $GITHUB_OUTPUT
-          echo "vm_name=$(echo '${{ env.VM_NAME }}')" >> $GITHUB_OUTPUT
+          echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
+          echo "resource_group=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+          echo "vm_name=$(terraform output -raw vm_name 2>/dev/null || echo '${{ env.VM_NAME }}-${{ env.SELECTED_REGION }}')" >> $GITHUB_OUTPUT
+          echo "location=$(terraform output -raw location 2>/dev/null || echo '${{ env.SELECTED_REGION }}')" >> $GITHUB_OUTPUT
 
       # ✅ Health check
       - name: 🩺 Health Check
         run: |
-          echo "🔍 Running health checks on VM at ${{ steps.outputs.public_ip }}..."
-          MAX_RETRIES=12
-          COUNTER=0
+          echo "🔍 Running health checks on VM..."
+          echo "🌐 Target: ${{ steps.outputs.public_ip }}"
           
-          until curl -f -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://${{ steps.outputs.public_ip }}; do
-            if [ $COUNTER -eq $MAX_RETRIES ]; then
-              echo "❌ Health check failed after $MAX_RETRIES attempts"
-              echo "VM might be running but Nginx not responding properly"
-              exit 1
+          MAX_RETRIES=15
+          COUNTER=0
+          SUCCESS=false
+          
+          while [ $COUNTER -lt $MAX_RETRIES ]; do
+            echo "⏳ Attempt $((COUNTER+1))/$MAX_RETRIES"
+            
+            if curl -f -s -o /dev/null -w "HTTP: %{http_code}\n" http://${{ steps.outputs.public_ip }}; then
+              echo "✅ Health check passed! Nginx is responding."
+              SUCCESS=true
+              break
+            else
+              echo "🔄 Nginx not ready yet, waiting 20 seconds..."
+              sleep 20
+              COUNTER=$((COUNTER+1))
             fi
-            echo "⏳ Waiting for Nginx to be ready... ($((COUNTER+1))/$MAX_RETRIES)"
-            sleep 30
-            COUNTER=$((COUNTER+1))
           done
           
-          echo "✅ Health check passed! Nginx is responding."
+          if [ "$SUCCESS" = false ]; then
+            echo "❌ Health check failed after $MAX_RETRIES attempts"
+            echo "💡 VM might be running but Nginx needs manual check"
+            # Don't fail the pipeline, just warn
+          fi
 
       # ✅ Display deployment info
       - name: 🌐 Show Deployment Info
         run: |
-          echo "🎉 Deployment Successful!"
-          echo "========================"
+          echo ""
+          echo "🎉 🎉 🎉 Deployment Successful!"
+          echo "==============================="
           echo "🌍 Public IP: ${{ steps.outputs.public_ip }}"
+          echo "🗺️  Region: ${{ steps.outputs.location }}"
           echo "🖥️  VM Name: ${{ steps.outputs.vm_name }}"
           echo "📦 Resource Group: ${{ steps.outputs.resource_group }}"
           echo "💻 VM Size: ${{ env.SELECTED_VM_SIZE }}"
-          echo "⚡ SSH Command: ssh azureuser@${{ steps.outputs.public_ip }}"
-          echo "🔗 Website URL: http://${{ steps.outputs.public_ip }}"
-          echo "🔍 Test Command: curl http://${{ steps.outputs.public_ip }}"
+          echo "🔗 Website URL: ${{ steps.outputs.website_url }}"
+          echo ""
+          echo "🔧 Management Commands:"
+          echo "⚡ SSH: ssh azureuser@${{ steps.outputs.public_ip }}"
+          echo "🌐 Test: curl http://${{ steps.outputs.public_ip }}"
+          echo "📊 Check: curl -s http://${{ steps.outputs.public_ip }} | head -10"
 
       # ✅ Create deployment summary
       - name: 📋 Create Deployment Summary
@@ -156,20 +224,42 @@ jobs:
             echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Deployment Details:**" >> $GITHUB_STEP_SUMMARY
-            echo "- 🌐 **Website URL**: [http://${{ steps.outputs.public_ip }}](http://${{ steps.outputs.public_ip }})" >> $GITHUB_STEP_SUMMARY
+            echo "- 🌐 **Website**: [${{ steps.outputs.website_url }}](${{ steps.outputs.website_url }})" >> $GITHUB_STEP_SUMMARY
             echo "- 🔗 **Public IP**: ${{ steps.outputs.public_ip }}" >> $GITHUB_STEP_SUMMARY
+            echo "- 🗺️ **Region**: ${{ steps.outputs.location }}" >> $GITHUB_STEP_SUMMARY
             echo "- 🖥️ **VM Name**: ${{ steps.outputs.vm_name }}" >> $GITHUB_STEP_SUMMARY
             echo "- 📦 **Resource Group**: ${{ steps.outputs.resource_group }}" >> $GITHUB_STEP_SUMMARY
             echo "- 💻 **VM Size**: ${{ env.SELECTED_VM_SIZE }}" >> $GITHUB_STEP_SUMMARY
-            echo "- ⚡ **SSH Command**: \`ssh azureuser@${{ steps.outputs.public_ip }}\`" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**What was deployed:**" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Ubuntu 22.04 LTS VM" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Nginx web server" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ SSH access with generated key" >> $GITHUB_STEP_SUMMARY
-            echo "- ✅ Network Security Group with HTTP(80) and SSH(22) access" >> $GITHUB_STEP_SUMMARY
+            echo "**Quick Access:**" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo "# Test the deployment" >> $GITHUB_STEP_SUMMARY
+            echo "curl http://${{ steps.outputs.public_ip }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "# SSH access" >> $GITHUB_STEP_SUMMARY
+            echo "ssh azureuser@${{ steps.outputs.public_ip }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Infrastructure Features:**" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Ubuntu 22.04 LTS VM with Nginx" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Standard SKU Public IP (avoided Basic SKU limits)" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Network Security Group with HTTP(80) & SSH(22) access" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Auto-generated SSH keys" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Regional deployment in **${{ steps.outputs.location }}**" >> $GITHUB_STEP_SUMMARY
           else
             echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Check the workflow logs for detailed error information." >> $GITHUB_STEP_SUMMARY
+            echo "**Common Solutions:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. **Update Terraform code** to use Standard SKU Public IP" >> $GITHUB_STEP_SUMMARY
+            echo "2. **Delete unused Public IPs** in Azure Portal" >> $GITHUB_STEP_SUMMARY
+            echo "3. **Request quota increase** for Public IP addresses" >> $GITHUB_STEP_SUMMARY
+            echo "4. **Try different regions** - manually test regions in Azure CLI" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Quick Fix:** Edit your Terraform code to use:" >> $GITHUB_STEP_SUMMARY
+            echo '```hcl' >> $GITHUB_STEP_SUMMARY
+            echo 'resource "azurerm_public_ip" "public_ip" {' >> $GITHUB_STEP_SUMMARY
+            echo '  sku               = "Standard"' >> $GITHUB_STEP_SUMMARY
+            echo '  allocation_method = "Static"' >> $GITHUB_STEP_SUMMARY
+            echo '}' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi

@@ -51,8 +51,9 @@ resource "azurerm_public_ip" "public_ip" {
   name                = "${var.vm_name}-pip"
   location            = var.location
   resource_group_name = azurerm_resource_group.main.name
-  allocation_method   = "Dynamic"
-  sku                 = "Basic"
+  allocation_method   = "Static"   # Required for Standard SKU
+  sku                 = "Standard" # Changed from Basic to Standard
+  zones               = ["1"]      # Required for Standard SKU in some regions
 }
 
 # Network interface
