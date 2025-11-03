@@ -32,7 +32,7 @@ jobs:
 
     steps:
     # ----------------------------
-    # Checkout and setup
+    # Checkout repository
     # ----------------------------
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -55,9 +55,9 @@ jobs:
           ${{ runner.os }}-terraform-
 
     # ----------------------------
-    # Azure authentication via OIDC
+    # ✅ Azure OIDC Authentication
     # ----------------------------
-    - name: Azure Login using OIDC
+    - name: Azure Login (OIDC)
       uses: azure/login@v2
       with:
         client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -72,22 +72,19 @@ jobs:
         az account show
 
     # ----------------------------
-    # Terraform Format Check
+    # Terraform Format
     # ----------------------------
     - name: Terraform Format Check
-      id: fmt
       run: terraform fmt -check -recursive
 
     # ----------------------------
     # Terraform Init / Validate
     # ----------------------------
     - name: Terraform Init
-      id: init
       run: terraform init -input=false
       working-directory: ${{ env.TF_WORKING_DIR }}
 
     - name: Terraform Validate
-      id: validate
       run: terraform validate -no-color
       working-directory: ${{ env.TF_WORKING_DIR }}
 
@@ -95,7 +92,6 @@ jobs:
     # Terraform Plan
     # ----------------------------
     - name: Terraform Plan
-      id: plan
       run: |
         terraform plan -input=false -no-color \
           -var "subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}" \
@@ -103,7 +99,6 @@ jobs:
           -var "client_id=${{ vars.AZURE_CLIENT_ID }}" \
           -var-file="terraform.tfvars" -out=tfplan
       working-directory: ${{ env.TF_WORKING_DIR }}
-      continue-on-error: false
 
     - name: Upload Terraform Plan Artifact
       if: always() && github.event_name == 'pull_request'
@@ -118,7 +113,6 @@ jobs:
     # ----------------------------
     - name: Terraform Apply
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      id: apply
       run: |
         terraform apply -auto-approve -input=false \
           -var "subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}" \
