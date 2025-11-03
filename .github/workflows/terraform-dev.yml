@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  id-token: write     # ✅ Needed for Azure login OIDC
+  contents: read
+
 env:
   TF_WORKING_DIR: ./environments/dev
   AZURE_RESOURCE_GROUP: rg-dev-vm
@@ -24,33 +28,24 @@ jobs:
         with:
           terraform_version: 1.8.5
 
-      - name: Azure Login (CLI)
+      # ✅ Correct Azure Login Step
+      - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.ARM_CLIENT_ID }}
-          tenant-id: ${{ secrets.ARM_TENANT_ID }}
-          subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          client-secret: ${{ secrets.ARM_CLIENT_SECRET }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
-        env:
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-        run: |
-          terraform init -input=false -no-color
+        run: terraform init -input=false -no-color
 
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
         run: |
-          set +e
           echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists..."
           az group show --name $AZURE_RESOURCE_GROUP --subscription $ARM_SUBSCRIPTION_ID > /dev/null 2>&1
           if [ $? -eq 0 ]; then
@@ -59,7 +54,6 @@ jobs:
           else
             echo "ℹ️ Resource Group not found. Terraform will create it."
           fi
-          set -e
 
           terraform plan -input=false -no-color \
             -var="subscription_id=$ARM_SUBSCRIPTION_ID" \
@@ -71,13 +65,11 @@ jobs:
       - name: Terraform Apply
         working-directory: ${{ env.TF_WORKING_DIR }}
         env:
-          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-          AZURE_RESOURCE_GROUP: rg-dev-vm
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
         run: |
-          set +e
           echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists..."
           az group show --name $AZURE_RESOURCE_GROUP --subscription $ARM_SUBSCRIPTION_ID > /dev/null 2>&1
           if [ $? -eq 0 ]; then
@@ -86,7 +78,6 @@ jobs:
           else
             echo "ℹ️ Resource Group not found. Terraform will create it."
           fi
-          set -e
 
           echo "🚀 Applying Terraform changes..."
           terraform apply -auto-approve -input=false \
