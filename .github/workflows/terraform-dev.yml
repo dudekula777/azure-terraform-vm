@@ -5,18 +5,14 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  id-token: write     # Required for OIDC authentication
-  contents: read
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     env:
       TF_WORKING_DIR: ./environments/dev
-      LOCATION: centralus
-      AZURE_RESOURCE_GROUP: rg-dev-vm
+      LOCATION: eastus  # Changed from centralus to avoid limits
+      AZURE_RESOURCE_GROUP: rg-dev-vm-eastus
       VM_NAME: dev-vm-instance
       VM_SIZES: Standard_B1s Standard_B2s Standard_B2ms
 
@@ -29,53 +25,105 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      # ✅ Secure OIDC-based login (no client secret required)
-      - name: 🔐 Azure Login (OIDC)
-        uses: azure/login@v2
+      # ✅ Use Service Principal authentication (compatible with your Terraform code)
+      - name: 🔐 Azure Login (Service Principal)
+        uses: azure/login@v1
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: 🔍 Verify Azure Login
+        run: |
+          echo "✅ Logged into Azure subscription:"
+          az account show --query name -o tsv
+
+      # ✅ Create terraform.tfvars with all required variables
+      - name: 📄 Create terraform.tfvars
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          cat > terraform.tfvars << 'EOF'
+location = "${{ env.LOCATION }}"
+resource_group_name = "${{ env.AZURE_RESOURCE_GROUP }}"
+vm_name = "${{ env.VM_NAME }}"
+vm_size = "Standard_B1s"
+EOF
+          echo "✅ Created terraform.tfvars"
 
       # ✅ Initialize Terraform
       - name: ⚙️ Terraform Init
-        run: terraform -chdir=$TF_WORKING_DIR init -upgrade
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} init -upgrade -input=false
 
       # ✅ Validate configuration
       - name: 🧪 Terraform Validate
-        run: terraform -chdir=$TF_WORKING_DIR validate
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate -no-color
 
-      # ✅ Plan with retry logic (tries alternate VM sizes)
-      - name: 🧭 Terraform Plan (Dynamic VM Size)
+      # ✅ Terraform Plan with VM size fallback
+      - name: 🧭 Terraform Plan
+        id: plan
         run: |
-          set -e
-          cd $TF_WORKING_DIR
+          cd ${{ env.TF_WORKING_DIR }}
           PLAN_SUCCESS=false
-          for size in $VM_SIZES; do
+          
+          for size in ${{ env.VM_SIZES }}; do
             echo "💻 Trying VM size: $size"
-            terraform plan -no-color -out=tfplan \
-              -var "subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-              -var "tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-              -var "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-              -var "location=$LOCATION" \
-              -var "vm_size=$size" && PLAN_SUCCESS=true && break
+            
+            # Update vm_size in tfvars
+            sed -i "s/vm_size = \".*\"/vm_size = \"$size\"/" terraform.tfvars
+            
+            if terraform plan -no-color -out=tfplan -var-file="terraform.tfvars"; then
+              echo "✅ Plan successful with VM size: $size"
+              echo "SELECTED_VM_SIZE=$size" >> $GITHUB_ENV
+              PLAN_SUCCESS=true
+              break
+            else
+              echo "⚠️ Plan failed with VM size: $size, trying next..."
+              rm -f tfplan
+            fi
           done
+          
           if [ "$PLAN_SUCCESS" = false ]; then
-            echo "❌ No suitable VM size found."
+            echo "❌ No suitable VM size found from: ${{ env.VM_SIZES }}"
             exit 1
           fi
 
       # ✅ Apply Terraform changes
       - name: 🚀 Terraform Apply
         run: |
-          echo "🚀 Applying Terraform plan..."
-          terraform -chdir=$TF_WORKING_DIR apply -auto-approve "tfplan"
+          echo "🚀 Applying Terraform plan with VM size: ${{ env.SELECTED_VM_SIZE }}"
+          terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve -input=false tfplan
 
-      # ✅ Display outputs (Public IP + Nginx URL)
-      - name: 🌐 Show Public IP & Website URL
+      # ✅ Get Terraform outputs
+      - name: 📤 Get Outputs
+        id: outputs
         run: |
-          cd $TF_WORKING_DIR
-          echo "🌍 Public IP:"
-          terraform output -raw vm_public_ip
-          echo "🔗 Website URL:"
-          terraform output -raw website_url
+          cd ${{ env.TF_WORKING_DIR }}
+          echo "public_ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
+          echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
+
+      # ✅ Health check
+      - name: 🩺 Health Check
+        run: |
+          echo "🔍 Running health checks on VM at ${{ steps.outputs.public_ip }}..."
+          MAX_RETRIES=10
+          COUNTER=0
+          
+          until curl -f -s http://${{ steps.outputs.public_ip }}; do
+            if [ $COUNTER -eq $MAX_RETRIES ]; then
+              echo "❌ Health check failed after $MAX_RETRIES attempts"
+              exit 1
+            fi
+            echo "⏳ Waiting for VM to be ready... ($((COUNTER+1))/$MAX_RETRIES)"
+            sleep 30
+            COUNTER=$((COUNTER+1))
+          done
+          
+          echo "✅ Health check passed! Nginx is responding."
+
+      # ✅ Display deployment info
+      - name: 🌐 Show Deployment Info
+        run: |
+          echo "🎉 Deployment Successful!"
+          echo "========================"
+          echo "🌍 Public IP: ${{ steps.outputs.public_ip }}"
+          echo "🔗 Website URL: ${{ steps.outputs.website_url }}"
+          echo "💻 VM Size: ${{ env.SELECTED_VM_SIZE }}"
+          echo "⚡ SSH Command: ssh azureuser@${{ steps.outputs.public_ip }}"
