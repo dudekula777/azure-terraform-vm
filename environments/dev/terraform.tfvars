@@ -1,7 +1,7 @@
 resource_group_name = "rg-dev-vm"
 location            = "East US"
 prefix              = "dev"
-vm_size             = "Standard_B1ms"
+vm_size             = "Standard_B2s"
 admin_username      = "azureuser"
 
 tags = {
