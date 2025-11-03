@@ -1,4 +1,13 @@
-# Provider configuration
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~>3.100"
+    }
+  }
+  required_version = ">= 1.5.0"
+}
+
 provider "azurerm" {
   features {}
   subscription_id = var.subscription_id
@@ -6,7 +15,6 @@ provider "azurerm" {
   client_id       = var.client_id
   client_secret   = var.client_secret
 }
-
 provider "tls" {}
 
 # Local variables
@@ -17,120 +25,104 @@ locals {
     ManagedBy   = "terraform"
   }
 }
-
-# Create resource group
+# Import-friendly resource group
 resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
   location = var.location
-  tags     = local.common_tags
 }
 
-# Create virtual network
-resource "azurerm_virtual_network" "main" {
-  name                = "${var.prefix}-vnet"
+# Network
+resource "azurerm_virtual_network" "vnet" {
+  name                = "${var.vm_name}-vnet"
   address_space       = ["10.0.0.0/16"]
-  location            = azurerm_resource_group.main.location
+  location            = var.location
   resource_group_name = azurerm_resource_group.main.name
-  tags                = local.common_tags
 }
 
-# Create subnet
-resource "azurerm_subnet" "main" {
-  name                 = "${var.prefix}-subnet"
+resource "azurerm_subnet" "subnet" {
+  name                 = "${var.vm_name}-subnet"
   resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
   address_prefixes     = ["10.0.1.0/24"]
 }
 
-# Create public IP
-resource "azurerm_public_ip" "main" {
-  name                = "dev-publicip"
-  location            = "eastus"
+# Public IP
+resource "azurerm_public_ip" "public_ip" {
+  name                = "${var.vm_name}-pip"
+  location            = var.location
   resource_group_name = azurerm_resource_group.main.name
-  allocation_method   = "Static" # <-- Fix here
-  sku                 = "Standard"
-  tags = {
-    Environment = "dev"
-    Project     = "azure-vm"
-    ManagedBy   = "terraform"
-  }
+  allocation_method   = "Dynamic"
+  sku                 = "Basic"
 }
 
-
-# Create network security group
-resource "azurerm_network_security_group" "main" {
-  name                = "${var.prefix}-nsg"
-  location            = azurerm_resource_group.main.location
+# Network interface
+resource "azurerm_network_interface" "nic" {
+  name                = "${var.vm_name}-nic"
+  location            = var.location
   resource_group_name = azurerm_resource_group.main.name
-  tags                = local.common_tags
-
-  security_rule {
-    name                       = "SSH"
-    priority                   = 1001
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-
-  security_rule {
-    name                       = "HTTP"
-    priority                   = 1002
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "80"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-}
-
-# Create network interface
-resource "azurerm_network_interface" "main" {
-  name                = "${var.prefix}-nic"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-  tags                = local.common_tags
 
   ip_configuration {
     name                          = "internal"
-    subnet_id                     = azurerm_subnet.main.id
+    subnet_id                     = azurerm_subnet.subnet.id
     private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.main.id
+    public_ip_address_id          = azurerm_public_ip.public_ip.id
   }
 }
 
-# Associate NSG with NIC
-resource "azurerm_network_interface_security_group_association" "main" {
-  network_interface_id      = azurerm_network_interface.main.id
-  network_security_group_id = azurerm_network_security_group.main.id
+# Security group
+resource "azurerm_network_security_group" "nsg" {
+  name                = "${var.vm_name}-nsg"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.main.name
+
+  security_rule {
+    name                       = "AllowHTTP"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range           = "*"
+    destination_port_range      = "80"
+    source_address_prefix       = "*"
+    destination_address_prefix  = "*"
+  }
+
+  security_rule {
+    name                       = "AllowSSH"
+    priority                   = 101
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range           = "*"
+    destination_port_range      = "22"
+    source_address_prefix       = "*"
+    destination_address_prefix  = "*"
+  }
 }
 
-# Generate SSH key pair
+resource "azurerm_network_interface_security_group_association" "nsg_assoc" {
+  network_interface_id      = azurerm_network_interface.nic.id
+  network_security_group_id = azurerm_network_security_group.nsg.id
+}
+
+# SSH key
 resource "tls_private_key" "vm_ssh" {
   algorithm = "RSA"
   rsa_bits  = 4096
 }
 
-# Create Linux Virtual Machine
-resource "azurerm_linux_virtual_machine" "main" {
-  name                = "${var.prefix}-vm"
+# VM
+resource "azurerm_linux_virtual_machine" "vm" {
+  name                = var.vm_name
+  location            = var.location
   resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
   size                = var.vm_size
-  admin_username      = var.admin_username
-  tags                = local.common_tags
+  admin_username      = "azureuser"
 
-  network_interface_ids = [
-    azurerm_network_interface.main.id,
-  ]
+  network_interface_ids = [azurerm_network_interface.nic.id]
 
   admin_ssh_key {
-    username   = var.admin_username
+    username   = "azureuser"
     public_key = tls_private_key.vm_ssh.public_key_openssh
   }
 
@@ -142,44 +134,21 @@ resource "azurerm_linux_virtual_machine" "main" {
   source_image_reference {
     publisher = "Canonical"
     offer     = "0001-com-ubuntu-server-jammy"
-    sku       = "22_04-lts-gen2"
+    sku       = "22_04-lts"
     version   = "latest"
   }
 
-  custom_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
-    admin_username = var.admin_username
-    message        = "VM provisioned by Terraform"
-  }))
-
-  depends_on = [
-    azurerm_network_interface_security_group_association.main
-  ]
+  custom_data = base64encode(<<EOF
+#!/bin/bash
+sudo apt update -y
+sudo apt install nginx -y
+sudo systemctl enable nginx
+sudo systemctl start nginx
+echo "<h1>Welcome to Dev VM with NGINX 🚀</h1>" | sudo tee /var/www/html/index.html
+EOF
+  )
 }
 
-# Save SSH private key locally
-resource "local_file" "ssh_private_key" {
-  content         = tls_private_key.vm_ssh.private_key_openssh
-  filename        = "${path.module}/azure_vm_key.pem"
-  file_permission = "0600"
-}
-
-# Output values
-output "vm_public_ip" {
-  description = "Public IP address of the VM"
-  value       = azurerm_linux_virtual_machine.main.public_ip_address
-}
-
-output "resource_group_name" {
-  description = "Name of the resource group"
-  value       = azurerm_resource_group.main.name
-}
-
-output "ssh_connection_command" {
-  description = "SSH connection command"
-  value       = "ssh -i azure_vm_key.pem ${var.admin_username}@${azurerm_linux_virtual_machine.main.public_ip_address}"
-}
-
-output "website_url" {
-  description = "URL to access the website"
-  value       = "http://${azurerm_linux_virtual_machine.main.public_ip_address}"
+output "public_ip" {
+  value = azurerm_public_ip.public_ip.ip_address
 }

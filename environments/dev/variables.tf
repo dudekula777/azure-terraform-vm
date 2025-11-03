@@ -1,22 +1,20 @@
 variable "subscription_id" {}
 variable "tenant_id" {}
 variable "client_id" {}
-variable "client_secret" {
-  description = "Azure Service Principal client secret"
-  type        = string
-}
-
-variable "resource_group_name" {
-  description = "Name of the resource group"
-  type        = string
-  default     = "rg-dev-vm"
-}
-
+variable "client_secret" {}
 variable "location" {
-  description = "Azure region"
-  type        = string
-  default     = "centralus"
+  default = "centralus"
 }
+variable "resource_group_name" {
+  default = "rg-dev-vm"
+}
+variable "vm_name" {
+  default = "dev-vm-instance"
+}
+variable "vm_size" {
+  default = "Standard_B1s"
+}
+
 
 variable "prefix" {
   description = "Prefix for resource names"
