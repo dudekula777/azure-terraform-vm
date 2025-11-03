@@ -1,0 +1,126 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose
+  - nginx
+  - curl
+  - wget
+  - git
+  - htop
+
+groups:
+  - docker
+
+system_info:
+  default_user:
+    groups: [docker]
+
+users:
+  - name: ${admin_username}
+    groups: docker
+    shell: /bin/bash
+
+runcmd:
+  - systemctl enable docker
+  - systemctl start docker
+  - systemctl enable nginx
+  - systemctl start nginx
+  - usermod -aG docker ${admin_username}
+  - docker --version
+  - nginx -v
+  - ufw allow 'Nginx Full'
+  - echo "${message}" > /home/${admin_username}/welcome.txt
+
+write_files:
+  - path: /etc/nginx/sites-available/default
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          root /var/www/html;
+          index index.html index.htm index.nginx-debian.html;
+          server_name _;
+          location / {
+              try_files $uri $uri/ =404;
+          }
+          location /status {
+              stub_status;
+              allow all;
+          }
+      }
+  - path: /var/www/html/index.html
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Welcome to Azure VM</title>
+          <style>
+              body {
+                  font-family: Arial, sans-serif;
+                  margin: 40px;
+                  background-color: #f0f8ff;
+              }
+              .container {
+                  max-width: 800px;
+                  margin: 0 auto;
+                  background: white;
+                  padding: 30px;
+                  border-radius: 10px;
+                  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+              }
+              h1 {
+                  color: #0078d4;
+              }
+              .status {
+                  background: #e7f3ff;
+                  padding: 15px;
+                  border-radius: 5px;
+                  margin: 20px 0;
+              }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>🚀 Success! Azure VM is Running</h1>
+              <div class="status">
+                  <p><strong>Nginx:</strong> ✅ Running</p>
+                  <p><strong>Docker:</strong> ✅ Installed</p>
+                  <p><strong>Terraform:</strong> ✅ Provisioned</p>
+              </div>
+              <p>This virtual machine was automatically provisioned using Terraform and includes:</p>
+              <ul>
+                  <li>Nginx web server</li>
+                  <li>Docker Engine</li>
+                  <li>Docker Compose</li>
+                  <li>Automatic security updates</li>
+              </ul>
+              <p><em>Managed by Infrastructure as Code</em></p>
+          </div>
+      </body>
+      </html>
+  - path: /home/${admin_username}/provisioning-info.txt
+    content: |
+      Azure VM Provisioning Information
+      =================================
+      Provisioned by: Terraform
+      Timestamp: $(date)
+      Admin User: ${admin_username}
+      Packages Installed:
+        - Docker
+        - Nginx
+        - Docker Compose
+      
+      Useful Commands:
+        - Check Docker: sudo systemctl status docker
+        - Check Nginx: sudo systemctl status nginx
+        - View logs: sudo journalctl -u nginx -f
+      
+      Web root: /var/www/html
+      Nginx config: /etc/nginx/sites-available/default
+
+final_message: "The Azure VM system is finally up, after $UPTIME seconds"

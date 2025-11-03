@@ -1,9 +1,7 @@
-output "nsg_id" {
-  description = "Network Security Group ID"
-  value       = azurerm_network_security_group.main.id
+output "network_security_group_id" {
+  value = azurerm_network_security_group.main.id
 }
 
-output "nsg_name" {
-  description = "Network Security Group name"
-  value       = azurerm_network_security_group.main.name
+output "network_security_group_name" {
+  value = azurerm_network_security_group.main.name
 }

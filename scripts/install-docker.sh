@@ -1,14 +1,10 @@
 #!/bin/bash
 
-set -e  # Exit on any error
-
-echo "Starting Docker installation..."
-
 # Update package index
-apt-get update
+sudo apt-get update
 
 # Install prerequisites
-apt-get install -y \
+sudo apt-get install -y \
     apt-transport-https \
     ca-certificates \
     curl \
@@ -16,33 +12,26 @@ apt-get install -y \
     lsb-release
 
 # Add Docker's official GPG key
-mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
 
-# Set up the stable repository
+# Add Docker repository
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# Update package index again
-apt-get update
+  "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
+  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 # Install Docker Engine
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-
-# Start and enable Docker service
-systemctl start docker
-systemctl enable docker
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io
 
 # Add user to docker group
-usermod -aG docker $USER
+sudo usermod -aG docker $USER
 
-# Verify installation
-docker --version
-echo "Docker installed successfully!"
+# Start and enable Docker service
+sudo systemctl start docker
+sudo systemctl enable docker
 
-# Test Docker with hello-world
-echo "Testing Docker with hello-world container..."
-docker run --rm hello-world
+# Install Docker Compose
+sudo curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
 
-echo "Docker installation and test completed successfully!"
+echo "Docker and Docker Compose installation completed!"

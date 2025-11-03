@@ -1,24 +1,20 @@
-output "vm_id" {
-  description = "Virtual Machine ID"
-  value       = azurerm_linux_virtual_machine.main.id
-}
-
-output "vm_name" {
-  description = "Virtual Machine name"
-  value       = azurerm_linux_virtual_machine.main.name
-}
-
 output "vm_public_ip" {
-  description = "Public IP address of the VM"
-  value       = azurerm_public_ip.main.ip_address
+  value = azurerm_linux_virtual_machine.main.public_ip_address
 }
 
 output "vm_private_ip" {
-  description = "Private IP address of the VM"
-  value       = azurerm_network_interface.main.private_ip_address
+  value = azurerm_linux_virtual_machine.main.private_ip_address
+}
+
+output "ssh_private_key" {
+  value     = tls_private_key.vm_ssh.private_key_openssh
+  sensitive = true
+}
+
+output "ssh_public_key" {
+  value = tls_private_key.vm_ssh.public_key_openssh
 }
 
 output "network_interface_id" {
-  description = "Network Interface ID"
-  value       = azurerm_network_interface.main.id
+  value = azurerm_network_interface.main.id
 }

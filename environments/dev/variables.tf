@@ -1,26 +1,19 @@
 variable "resource_group_name" {
   description = "Name of the resource group"
   type        = string
+  default     = "rg-dev-vm"
 }
 
 variable "location" {
   description = "Azure region"
   type        = string
+  default     = "East US"
 }
 
 variable "prefix" {
   description = "Prefix for resource names"
   type        = string
-}
-
-variable "subnet_id" {
-  description = "Subnet ID"
-  type        = string
-}
-
-variable "public_ip_id" {
-  description = "Public IP ID"
-  type        = string
+  default     = "dev"
 }
 
 variable "vm_size" {
@@ -33,16 +26,19 @@ variable "admin_username" {
   description = "Admin username"
   type        = string
   default     = "azureuser"
-}
-
-variable "custom_data" {
-  description = "Custom data for cloud-init"
-  type        = string
-  default     = ""
+  validation {
+    condition     = length(var.admin_username) >= 3 && length(var.admin_username) <= 24
+    error_message = "Admin username must be between 3 and 24 characters."
+  }
 }
 
 variable "tags" {
   description = "Tags for resources"
   type        = map(string)
-  default     = {}
+  default = {
+    Environment = "dev"
+    Project     = "terraform-vm"
+    ManagedBy   = "terraform"
+    Owner       = "devops-team"
+  }
 }
