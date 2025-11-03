@@ -18,19 +18,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Authenticate with Azure using Service Principal
+      # Azure Login
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      # Set environment variables for Terraform Azure provider
-      - name: Set Terraform Azure environment variables
-        run: |
-          echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}" >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}" >> $GITHUB_ENV
-          echo "ARM_SUBSCRIPTION_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
 
       # Setup Terraform
       - name: Setup Terraform
@@ -38,7 +30,7 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # Terraform Init (with backend config)
+      # Terraform Init
       - name: Terraform Init
         run: terraform init -reconfigure -backend-config=backend.config
 
@@ -48,12 +40,36 @@ jobs:
 
       # Terraform Plan
       - name: Terraform Plan
-        run: terraform plan -var-file="terraform.tfvars"
+        run: |
+          terraform plan \
+            -var "resource_group_name=rg-azure-vm" \
+            -var "location=eastus" \
+            -var "vnet_cidr=10.0.0.0/16" \
+            -var "subnet_cidr=10.0.1.0/24" \
+            -var "allowed_ssh_ips=[\"0.0.0.0/0\"]" \
+            -var "allowed_http_ips=[\"0.0.0.0/0\"]" \
+            -var "admin_username=azureuser" \
+            -var "vm_size=Standard_B1s" \
+            -var "install_docker=true" \
+            -var "install_nginx=true" \
+            -var "environment=prod"
 
       # Terraform Apply (only on main branch)
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
-        run: terraform apply -auto-approve -var-file="terraform.tfvars"
+        run: |
+          terraform apply -auto-approve \
+            -var "resource_group_name=rg-azure-vm" \
+            -var "location=eastus" \
+            -var "vnet_cidr=10.0.0.0/16" \
+            -var "subnet_cidr=10.0.1.0/24" \
+            -var "allowed_ssh_ips=[\"0.0.0.0/0\"]" \
+            -var "allowed_http_ips=[\"0.0.0.0/0\"]" \
+            -var "admin_username=azureuser" \
+            -var "vm_size=Standard_B1s" \
+            -var "install_docker=true" \
+            -var "install_nginx=true" \
+            -var "environment=prod"
 
       # Upload SSH Key Artifact
       - name: Upload SSH Key Artifact
