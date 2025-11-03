@@ -20,7 +20,7 @@ locals {
 
 # Create resource group
 resource "azurerm_resource_group" "main" {
-  name     = var.resource_group_name
+  name = "rg-dev-vm2"
   location = var.location
   tags     = local.common_tags
 }
