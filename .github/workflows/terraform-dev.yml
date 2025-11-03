@@ -20,7 +20,7 @@ jobs:
       TF_WORKING_DIR: ./environments/dev
       AZURE_RESOURCE_GROUP: rg-dev-vm
       VM_NAME: dev-vm-instance
-      REGIONS: "eastus centralus"
+      REGIONS: "centralus"
       VM_SIZES: "Standard_B1s Standard_B2s Standard_B2ms"
 
     steps:
