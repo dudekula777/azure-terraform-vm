@@ -1,12 +1,12 @@
 #cloud-config
 package_update: true
-package_upgrade: all
+package_upgrade: true
+
+packages:
+  - nginx
 
 runcmd:
-  - apt-get update -y
-  - apt-get install -y docker.io nginx
-  - systemctl enable docker
-  - systemctl start docker
   - systemctl enable nginx
   - systemctl start nginx
-  - echo "Hello from ${message}" > /var/www/html/index.html
+  - echo "<h1>🚀 Welcome to your Azure VM with NGINX!</h1>" > /var/www/html/index.html
+  - echo "Server is running and managed by Terraform." >> /var/www/html/index.html
