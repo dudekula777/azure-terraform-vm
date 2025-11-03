@@ -2,8 +2,6 @@ name: 'Terraform Deploy Azure VM'
 
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
     branches: [ main ]
 
 env:
@@ -11,77 +9,77 @@ env:
 
 jobs:
   terraform:
-    name: 'Terraform - ${{ github.ref == "refs/heads/main" && "prod" || "dev" }}'
+    name: 'Terraform - ${{ github.ref == "refs/heads/main" ? "prod" : "dev" }}'
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+    environment: ${{ github.ref == 'refs/heads/main' ? 'prod' : 'dev' }}
 
     steps:
-    # Checkout repository
-    - name: Checkout code
-      uses: actions/checkout@v4
+      # Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    # Azure Login
-    - name: Azure Login
-      uses: azure/login@v1
-      with:
-        creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # Azure Login
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    # Setup Terraform
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: ${{ env.TF_VERSION }}
+      # Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-    # Initialize Terraform
-    - name: Terraform Init
-      run: |
-        if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+      # Initialize Terraform
+      - name: Terraform Init
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            cd environments/prod
+          else
+            cd environments/dev
+          fi
+          terraform init
+
+      # Validate Terraform
+      - name: Terraform Validate
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            cd environments/prod
+          else
+            cd environments/dev
+          fi
+          terraform validate
+
+      # Plan for PRs
+      - name: Terraform Plan
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            cd environments/prod
+          else
+            cd environments/dev
+          fi
+          terraform plan -var-file="terraform.tfvars"
+
+      # Apply for main branch
+      - name: Terraform Apply (prod)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
           cd environments/prod
-        else
+          terraform apply -auto-approve -var-file="terraform.tfvars"
+
+      # Apply for develop branch
+      - name: Terraform Apply (dev)
+        if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+        run: |
           cd environments/dev
-        fi
-        terraform init
+          terraform apply -auto-approve -var-file="terraform.tfvars"
 
-    # Validate Terraform
-    - name: Terraform Validate
-      run: |
-        if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-          cd environments/prod
-        else
-          cd environments/dev
-        fi
-        terraform validate
-
-    # Plan for PRs
-    - name: Terraform Plan
-      if: github.event_name == 'pull_request'
-      run: |
-        if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-          cd environments/prod
-        else
-          cd environments/dev
-        fi
-        terraform plan -var-file="terraform.tfvars"
-
-    # Apply for main branch
-    - name: Terraform Apply
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-      run: |
-        cd environments/prod
-        terraform apply -auto-approve -var-file="terraform.tfvars"
-
-    # Apply for develop branch
-    - name: Terraform Apply Dev
-      if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
-      run: |
-        cd environments/dev
-        terraform apply -auto-approve -var-file="terraform.tfvars"
-
-    # Upload SSH Key
-    - name: Upload SSH Key Artifact
-      if: github.event_name == 'push'
-      uses: actions/upload-artifact@v4
-      with:
-        name: ssh-key-${{ github.sha }}
-        path: environments/*/azure_vm_key.pem
-        retention-days: 1
+      # Upload SSH Key Artifact
+      - name: Upload SSH Key Artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-key-${{ github.sha }}
+          path: environments/*/azure_vm_key.pem
+          retention-days: 1
