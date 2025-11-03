@@ -26,17 +26,21 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
 
+    # ✅ Required for OIDC authentication
     permissions:
-      id-token: write      # Required for OIDC authentication
+      id-token: write
       contents: read
 
     steps:
     # ----------------------------
-    # Checkout and setup
+    # Checkout repository
     # ----------------------------
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # ----------------------------
+    # Setup Terraform
+    # ----------------------------
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
@@ -44,14 +48,15 @@ jobs:
         terraform_wrapper: false
 
     # ----------------------------
-    # Azure OIDC Authentication
+    # Azure Login via OIDC (No secrets!)
     # ----------------------------
     - name: Azure Login with OIDC
       uses: azure/login@v2
       with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        client-id: ${{ vars.AZURE_CLIENT_ID }}
+        tenant-id: ${{ vars.AZURE_TENANT_ID }}
+        subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        auth-type: OIDC
 
     - name: Verify Azure Login
       run: |
@@ -81,9 +86,6 @@ jobs:
       id: plan
       run: |
         terraform plan -input=false -no-color \
-          -var "subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-          -var "tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-          -var "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
           -var-file="terraform.tfvars" -out=tfplan
       working-directory: ${{ env.TF_WORKING_DIR }}
 
@@ -102,15 +104,11 @@ jobs:
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: apply
       run: |
-        terraform apply -auto-approve -input=false \
-          -var "subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-          -var "tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-          -var "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-          -var-file="terraform.tfvars"
+        terraform apply -auto-approve -input=false -var-file="terraform.tfvars"
       working-directory: ${{ env.TF_WORKING_DIR }}
 
     # ----------------------------
-    # Extract Outputs & Health Check
+    # Extract Terraform Outputs
     # ----------------------------
     - name: Extract Terraform Outputs
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -120,6 +118,9 @@ jobs:
         echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
       working-directory: ${{ env.TF_WORKING_DIR }}
 
+    # ----------------------------
+    # Health Check (Optional)
+    # ----------------------------
     - name: Health Check
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       run: |
@@ -137,6 +138,9 @@ jobs:
         done
         echo "✅ Health check successful!"
 
+    # ----------------------------
+    # Deployment Summary
+    # ----------------------------
     - name: Show Deployment Info
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       run: |
