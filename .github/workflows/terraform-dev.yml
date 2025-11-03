@@ -1,4 +1,4 @@
-name: Terraform Azure VM with Nginx
+name: 🚀 Terraform Azure VM with Nginx
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write
+  id-token: write     # Required for OIDC authentication
   contents: read
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
       VM_SIZES: Standard_B1s Standard_B2s Standard_B2ms
 
     steps:
-      - name: 📥 Checkout code
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
       - name: 🧰 Setup Terraform
@@ -29,7 +29,7 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      # ✅ Correct Azure Login with OIDC (no service principal secret)
+      # ✅ Secure OIDC-based login (no client secret required)
       - name: 🔐 Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -37,19 +37,23 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: 🚀 Terraform Init
+      # ✅ Initialize Terraform
+      - name: ⚙️ Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -upgrade
 
+      # ✅ Validate configuration
       - name: 🧪 Terraform Validate
         run: terraform -chdir=$TF_WORKING_DIR validate
 
-      - name: 🧭 Terraform Plan (with retry logic)
+      # ✅ Plan with retry logic (tries alternate VM sizes)
+      - name: 🧭 Terraform Plan (Dynamic VM Size)
         run: |
           set -e
+          cd $TF_WORKING_DIR
           PLAN_SUCCESS=false
           for size in $VM_SIZES; do
             echo "💻 Trying VM size: $size"
-            terraform -chdir=$TF_WORKING_DIR plan -no-color -out=tfplan \
+            terraform plan -no-color -out=tfplan \
               -var "subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
               -var "tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
               -var "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
@@ -61,10 +65,17 @@ jobs:
             exit 1
           fi
 
+      # ✅ Apply Terraform changes
       - name: 🚀 Terraform Apply
         run: |
           echo "🚀 Applying Terraform plan..."
-          terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
+          terraform -chdir=$TF_WORKING_DIR apply -auto-approve "tfplan"
 
-      - name: 🌐 Show Public IP
-        run: terraform -chdir=$TF_WORKING_DIR output public_ip
+      # ✅ Display outputs (Public IP + Nginx URL)
+      - name: 🌐 Show Public IP & Website URL
+        run: |
+          cd $TF_WORKING_DIR
+          echo "🌍 Public IP:"
+          terraform output -raw vm_public_ip
+          echo "🔗 Website URL:"
+          terraform output -raw website_url
