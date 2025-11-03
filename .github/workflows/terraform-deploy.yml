@@ -1,80 +1,119 @@
-name: 'Terraform Deploy Azure VM'
+name: "Terraform Azure VM Deployment"
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  pull_request:
 
 env:
-  TF_VERSION: '1.5.0'
+  TF_VERSION: 1.5.0
+  RESOURCE_GROUP: rg-terraform-vm
+  LOCATION: eastus
+  STORAGE_ACCOUNT_NAME: sttfbackendgiri
+  CONTAINER_NAME: tfstate
+  KEY: terraform.tfstate
 
 jobs:
   terraform:
-    name: 'Terraform - prod'
+    name: "Terraform Init, Plan, and Apply"
     runs-on: ubuntu-latest
-    environment: prod
+
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
 
     steps:
-      # Checkout repository
-      - name: Checkout code
+      # -----------------------------
+      # Step 1. Checkout Code
+      # -----------------------------
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Azure Login
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      # Setup Terraform
+      # -----------------------------
+      # Step 2. Setup Terraform
+      # -----------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # Terraform Init
+      # -----------------------------
+      # Step 3. Azure Login (for backend)
+      # -----------------------------
+      - name: Azure CLI Login
+        run: |
+          az login --service-principal \
+            -u $ARM_CLIENT_ID \
+            -p $ARM_CLIENT_SECRET \
+            --tenant $ARM_TENANT_ID
+          az account set --subscription $ARM_SUBSCRIPTION_ID
+
+      # -----------------------------
+      # Step 4. Create Backend Storage (if not exists)
+      # -----------------------------
+      - name: Ensure Terraform Backend Exists
+        run: |
+          az group create --name $RESOURCE_GROUP --location $LOCATION
+          if ! az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP &>/dev/null; then
+            az storage account create \
+              --name $STORAGE_ACCOUNT_NAME \
+              --resource-group $RESOURCE_GROUP \
+              --location $LOCATION \
+              --sku Standard_LRS \
+              --kind StorageV2
+          fi
+
+          CONNECTION=$(az storage account show-connection-string \
+            --name $STORAGE_ACCOUNT_NAME \
+            --resource-group $RESOURCE_GROUP \
+            -o tsv)
+          
+          az storage container create \
+            --name $CONTAINER_NAME \
+            --connection-string "$CONNECTION"
+
+          echo "storage_account_name=${STORAGE_ACCOUNT_NAME}" > backend.config
+          echo "container_name=${CONTAINER_NAME}" >> backend.config
+          echo "key=${KEY}" >> backend.config
+          echo "resource_group_name=${RESOURCE_GROUP}" >> backend.config
+
+      # -----------------------------
+      # Step 5. Terraform Init
+      # -----------------------------
       - name: Terraform Init
         run: terraform init -reconfigure -backend-config=backend.config
 
-      # Terraform Validate
+      # -----------------------------
+      # Step 6. Terraform Validate
+      # -----------------------------
       - name: Terraform Validate
         run: terraform validate
 
-      # Terraform Plan
+      # -----------------------------
+      # Step 7. Terraform Plan
+      # -----------------------------
       - name: Terraform Plan
         run: |
-          terraform plan \
-            -var "resource_group_name=rg-azure-vm" \
-            -var "location=eastus" \
-            -var "vnet_cidr=10.0.0.0/16" \
-            -var "subnet_cidr=10.0.1.0/24" \
-            -var "allowed_ssh_ips=[\"0.0.0.0/0\"]" \
-            -var "allowed_http_ips=[\"0.0.0.0/0\"]" \
-            -var "admin_username=azureuser" \
-            -var "vm_size=Standard_B1s" \
-            -var "install_docker=true" \
-            -var "install_nginx=true" \
-            -var "environment=prod"
+          terraform plan -out=tfplan \
+            -var="resource_group_name=${RESOURCE_GROUP}" \
+            -var="location=${LOCATION}" \
+            -var="admin_username=azureuser" \
+            -var="vm_size=Standard_B1s" \
+            -var="install_docker=true" \
+            -var="install_nginx=false"
 
-      # Terraform Apply (only on main branch)
+      # -----------------------------
+      # Step 8. Terraform Apply (manual approval)
+      # -----------------------------
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
-        run: |
-          terraform apply -auto-approve \
-            -var "resource_group_name=rg-azure-vm" \
-            -var "location=eastus" \
-            -var "vnet_cidr=10.0.0.0/16" \
-            -var "subnet_cidr=10.0.1.0/24" \
-            -var "allowed_ssh_ips=[\"0.0.0.0/0\"]" \
-            -var "allowed_http_ips=[\"0.0.0.0/0\"]" \
-            -var "admin_username=azureuser" \
-            -var "vm_size=Standard_B1s" \
-            -var "install_docker=true" \
-            -var "install_nginx=true" \
-            -var "environment=prod"
+        run: terraform apply -auto-approve tfplan
 
-      # Upload SSH Key Artifact
-      - name: Upload SSH Key Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ssh-key-${{ github.sha }}
-          path: azure_vm_key.pem
-          retention-days: 1
+      # -----------------------------
+      # Step 9. Output VM Details
+      # -----------------------------
+      - name: Show Terraform Outputs
+        run: terraform output
