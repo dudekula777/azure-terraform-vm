@@ -32,6 +32,7 @@ jobs:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          enable-AzPSSession: false
 
       # ✅ Setup Terraform
       - name: Setup Terraform
@@ -54,9 +55,11 @@ jobs:
             -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
             -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
             -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
+            -var "client_secret=${{ secrets.ARM_CLIENT_SECRET }}" \
             -var-file="terraform.tfvars" -out=tfplan
 
       # ✅ Terraform Apply
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
-        run: terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
+        run: |
+          terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
