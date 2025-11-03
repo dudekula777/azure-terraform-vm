@@ -5,10 +5,6 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-permissions:
-  id-token: write
-  contents: read
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -21,11 +17,15 @@ jobs:
       VM_SIZES: Standard_B1s Standard_B2s Standard_B2ms
 
     steps:
-      # ✅ 1️⃣ Checkout Code
-      - name: 📥 Checkout Repository
+      - name: 📥 Checkout code
         uses: actions/checkout@v4
 
-      # ✅ 2️⃣ Azure Login via OIDC
+      - name: 🧰 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      # ✅ Secure and modern authentication using OIDC
       - name: 🔐 Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -33,81 +33,47 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # ✅ 3️⃣ Ensure Resource Group Exists / Import if Exists
-      - name: 🧩 Ensure Resource Group
-        run: |
-          echo "🔍 Checking if Resource Group '$AZURE_RESOURCE_GROUP' exists..."
-          if az group show --name $AZURE_RESOURCE_GROUP >/dev/null 2>&1; then
-            echo "✅ RG exists — ensuring it's tracked in Terraform..."
-            terraform -chdir=$TF_WORKING_DIR init -input=false || true
-            if terraform -chdir=$TF_WORKING_DIR state list | grep -q "azurerm_resource_group.main"; then
-              echo "✔️ RG already tracked in Terraform."
-            else
-              terraform -chdir=$TF_WORKING_DIR import \
-                azurerm_resource_group.main \
-                "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
-            fi
-          else
-            echo "🆕 Creating new Resource Group..."
-            az group create --name $AZURE_RESOURCE_GROUP --location $LOCATION
-          fi
+      - name: 🚀 Terraform Init
+        run: terraform -chdir=$TF_WORKING_DIR init -upgrade
 
-      # ✅ 4️⃣ Setup Terraform
-      - name: ⚙️ Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.5
+      - name: 🧪 Terraform Validate
+        run: terraform -chdir=$TF_WORKING_DIR validate
 
-      # ✅ 5️⃣ Cache Terraform Plugins
-      - name: 💾 Cache Terraform
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.TF_WORKING_DIR }}/.terraform
-            ${{ env.TF_WORKING_DIR }}/.terraform.lock.hcl
-          key: terraform-${{ hashFiles('**/*.tf') }}
-
-      # ✅ 6️⃣ Terraform Init + Validate
-      - name: 🧪 Terraform Init & Validate
-        run: |
-          terraform -chdir=$TF_WORKING_DIR init -upgrade
-          terraform -chdir=$TF_WORKING_DIR validate
-
-      # ✅ 7️⃣ Terraform Plan with Region + VM Retry Logic
-      - name: 🧭 Terraform Plan (Auto Retry)
+      # ✅ Automatically test VM sizes until one succeeds
+      - name: 🧭 Terraform Plan (with retry logic)
         run: |
           set -e
+          echo "🔍 Checking available VM sizes..."
           PLAN_SUCCESS=false
           for size in $VM_SIZES; do
-            echo "💻 Trying VM size: $size in region: $LOCATION"
+            echo "💻 Trying VM size: $size"
             terraform -chdir=$TF_WORKING_DIR plan -no-color -out=tfplan \
               -var "subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
               -var "tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
               -var "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-              -var "client_secret=${{ secrets.AZURE_CLIENT_SECRET }}" \
-              -var "resource_group_name=$AZURE_RESOURCE_GROUP" \
               -var "location=$LOCATION" \
-              -var "vm_size=$size" \
-              && PLAN_SUCCESS=true && break
+              -var "vm_size=$size" && PLAN_SUCCESS=true && break
           done
-
           if [ "$PLAN_SUCCESS" = false ]; then
             echo "❌ No suitable VM size found."
             exit 1
           fi
 
-      # ✅ 8️⃣ Terraform Apply (with correct flag order)
+      # ✅ Correct Terraform Apply syntax (no extra args)
       - name: 🚀 Terraform Apply
         run: |
           echo "🚀 Applying Terraform plan..."
-          terraform -chdir=$TF_WORKING_DIR apply \
-            -parallelism=2 \
-            -lock-timeout=5m \
-            -auto-approve tfplan
+          terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
 
-      # ✅ 9️⃣ Output the Public IP and Website URL
-      - name: 🌐 Get VM Public IP
+      # ✅ Display the public IP after deployment
+      - name: 🌐 Show Public IP
+        run: terraform -chdir=$TF_WORKING_DIR output public_ip
+
+      # ✅ Install and verify Nginx
+      - name: 🧩 Install Nginx on VM
         run: |
-          echo "🌍 Fetching deployed VM info..."
-          terraform -chdir=$TF_WORKING_DIR output -no-color vm_public_ip
-          terraform -chdir=$TF_WORKING_DIR output -no-color website_url
+          PUBLIC_IP=$(terraform -chdir=$TF_WORKING_DIR output -raw public_ip)
+          echo "🌍 Connecting to VM ($PUBLIC_IP)..."
+          ssh -o StrictHostKeyChecking=no -i ./environments/dev/ssh_key azureuser@$PUBLIC_IP "sudo apt update && sudo apt install -y nginx"
+          echo "✅ Nginx installed successfully!"
+          echo "🌐 Visit http://$PUBLIC_IP to view your Nginx welcome page"
