@@ -1,4 +1,4 @@
-name: 'Terraform Dev Environment (OIDC Auth)'
+name: 'Terraform Dev Environment'
 
 on:
   push:
@@ -15,9 +15,16 @@ on:
         options:
           - dev
 
+permissions:
+  id-token: write   # ✅ Required for OIDC
+  contents: read
+
 env:
   TF_WORKING_DIR: './environments/dev'
   AZURE_RESOURCE_GROUP: 'rg-dev-vm'
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
   ARM_USE_OIDC: true
 
 jobs:
@@ -26,29 +33,32 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
 
-    # ✅ Required for OIDC authentication
-    permissions:
-      id-token: write
-      contents: read
-
     steps:
     # ----------------------------
-    # Checkout repository
+    # Checkout and setup
     # ----------------------------
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # ----------------------------
-    # Setup Terraform
-    # ----------------------------
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
-        terraform_version: '1.6.6'
+        terraform_version: '1.5.7'
         terraform_wrapper: false
 
+    # Optional caching for faster runs
+    - name: Cache Terraform plugins/modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.terraform.d/plugin-cache
+          ${{ env.TF_WORKING_DIR }}/.terraform
+        key: ${{ runner.os }}-terraform-${{ hashFiles('**/*.tf') }}
+        restore-keys: |
+          ${{ runner.os }}-terraform-
+
     # ----------------------------
-    # Azure Login via OIDC (No secrets!)
+    # Azure authentication (OIDC)
     # ----------------------------
     - name: Azure Login with OIDC
       uses: azure/login@v2
@@ -56,7 +66,6 @@ jobs:
         client-id: ${{ vars.AZURE_CLIENT_ID }}
         tenant-id: ${{ vars.AZURE_TENANT_ID }}
         subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-        auth-type: OIDC
 
     - name: Verify Azure Login
       run: |
@@ -66,16 +75,22 @@ jobs:
         az account show
 
     # ----------------------------
-    # Terraform Format / Init / Validate
+    # Terraform Format
     # ----------------------------
     - name: Terraform Format Check
+      id: fmt
       run: terraform fmt -check -recursive
 
+    # ----------------------------
+    # Terraform Init / Validate
+    # ----------------------------
     - name: Terraform Init
+      id: init
       run: terraform init -input=false
       working-directory: ${{ env.TF_WORKING_DIR }}
 
     - name: Terraform Validate
+      id: validate
       run: terraform validate -no-color
       working-directory: ${{ env.TF_WORKING_DIR }}
 
@@ -86,8 +101,12 @@ jobs:
       id: plan
       run: |
         terraform plan -input=false -no-color \
+          -var "subscription_id=${{ env.ARM_SUBSCRIPTION_ID }}" \
+          -var "tenant_id=${{ env.ARM_TENANT_ID }}" \
+          -var "client_id=${{ env.ARM_CLIENT_ID }}" \
           -var-file="terraform.tfvars" -out=tfplan
       working-directory: ${{ env.TF_WORKING_DIR }}
+      continue-on-error: false
 
     - name: Upload Terraform Plan Artifact
       if: always() && github.event_name == 'pull_request'
@@ -104,7 +123,11 @@ jobs:
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: apply
       run: |
-        terraform apply -auto-approve -input=false -var-file="terraform.tfvars"
+        terraform apply -auto-approve -input=false \
+          -var "subscription_id=${{ env.ARM_SUBSCRIPTION_ID }}" \
+          -var "tenant_id=${{ env.ARM_TENANT_ID }}" \
+          -var "client_id=${{ env.ARM_CLIENT_ID }}" \
+          -var-file="terraform.tfvars"
       working-directory: ${{ env.TF_WORKING_DIR }}
 
     # ----------------------------
@@ -119,24 +142,24 @@ jobs:
       working-directory: ${{ env.TF_WORKING_DIR }}
 
     # ----------------------------
-    # Health Check (Optional)
+    # Health Check
     # ----------------------------
     - name: Health Check
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       run: |
-        echo "🩺 Testing Nginx web server..."
-        max_retries=20
+        echo "Testing Nginx web server..."
+        max_retries=30
         counter=0
         until curl -f http://${{ steps.outputs.outputs.vm_public_ip }}; do
           if [ $counter -eq $max_retries ]; then
-            echo "❌ Health check failed after $max_retries attempts"
+            echo "Health check failed after $max_retries attempts"
             exit 1
           fi
           echo "Waiting for VM to be ready... ($((counter+1))/$max_retries)"
-          sleep 20
+          sleep 30
           counter=$((counter+1))
         done
-        echo "✅ Health check successful!"
+        echo "Health check completed successfully!"
 
     # ----------------------------
     # Deployment Summary
