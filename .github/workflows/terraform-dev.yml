@@ -8,69 +8,82 @@ on:
     branches:
       - main
 
-env:
-  TF_WORKING_DIR: ./environments/dev
-  AZURE_RESOURCE_GROUP: rg-dev-vm
+permissions:
+  contents: read   # ✅ Required for actions/checkout
+  id-token: none   # ✅ Disable OIDC mode since we use client_secret auth
 
 jobs:
   terraform:
-    name: Terraform Deployment
+    name: Deploy Azure VM with Terraform
     runs-on: ubuntu-latest
 
+    env:
+      TF_WORKING_DIR: ./environments/dev
+      AZURE_RESOURCE_GROUP: rg-dev-vm
+
     steps:
-      # Step 1️⃣ - Checkout repository
-      - name: Checkout code
+      # Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Step 2️⃣ - Set up Terraform CLI
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.8
-
-      # Step 3️⃣ - Azure Login using Service Principal
-      - name: Azure Login
+      # Azure Login using Service Principal (with secret)
+      - name: Azure Login (Service Principal)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           client-secret: ${{ secrets.ARM_CLIENT_SECRET }}
+          auth-type: SERVICE_PRINCIPAL
 
-      # Step 4️⃣ - Terraform Init
+      # Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      # Terraform Init
       - name: Terraform Init
-        run: terraform -chdir=$TF_WORKING_DIR init
+        run: terraform -chdir=$TF_WORKING_DIR init -input=false
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
 
-      # Step 5️⃣ - Check and Import Existing Resource Group
+      # ✅ Import Existing Resource Group if it already exists
       - name: Check and Import Existing Resource Group
         run: |
           echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists..."
           if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
             echo "✅ Resource Group exists. Importing into Terraform state..."
             terraform -chdir=$TF_WORKING_DIR import \
-              -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
-              -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
-              -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
-              -var "client_secret=${{ secrets.ARM_CLIENT_SECRET }}" \
               azurerm_resource_group.main \
               "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
           else
             echo "ℹ️ Resource Group not found. Terraform will create it."
           fi
 
-      # Step 6️⃣ - Terraform Validate
+      # Terraform Validate
       - name: Terraform Validate
-        run: terraform -chdir=$TF_WORKING_DIR validate
+        run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
-      # Step 7️⃣ - Terraform Plan
+      # Terraform Plan
       - name: Terraform Plan
-        run: terraform -chdir=$TF_WORKING_DIR plan -out=tfplan
+        run: |
+          terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
+            -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
+            -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
+            -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
+            -var "client_secret=${{ secrets.ARM_CLIENT_SECRET }}" \
+            -var-file="terraform.tfvars" -out=tfplan
 
-      # Step 8️⃣ - Terraform Apply
+      # Terraform Apply (only on main branch)
       - name: Terraform Apply
+        if: github.ref == 'refs/heads/main'
         run: terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
-
-      # Step 9️⃣ - Post Azure Logout
-      - name: Post Azure Logout
-        if: always()
-        run: az logout
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
