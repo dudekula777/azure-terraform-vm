@@ -44,12 +44,18 @@ resource "azurerm_subnet" "main" {
 
 # Create public IP
 resource "azurerm_public_ip" "main" {
-  name                = "${var.prefix}-publicip"
-  location            = azurerm_resource_group.main.location
+  name                = "dev-publicip"
+  location            = "eastus"
   resource_group_name = azurerm_resource_group.main.name
-  allocation_method   = "Dynamic"
-  tags                = local.common_tags
+  allocation_method   = "Static" # <-- Fix here
+  sku                 = "Standard"
+  tags = {
+    Environment = "dev"
+    Project     = "azure-vm"
+    ManagedBy   = "terraform"
+  }
 }
+
 
 # Create network security group
 resource "azurerm_network_security_group" "main" {
