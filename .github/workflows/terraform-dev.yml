@@ -20,9 +20,11 @@ jobs:
       VM_SIZES: "Standard_B1s Standard_B2s Standard_B2ms"
 
     steps:
+      # ✅ 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ✅ 2. Azure Login
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -30,17 +32,20 @@ jobs:
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
+      # ✅ 3. Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.5
 
+      # ✅ 4. Terraform Init & Validate
       - name: Initialize Terraform
-        run: terraform init -input=false
+        run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
       - name: Validate Terraform configuration
-        run: terraform validate -no-color
+        run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
+      # ✅ 5. Ensure RG Exists
       - name: Ensure Resource Group Exists
         run: |
           if [ "$(az group exists --name $AZURE_RESOURCE_GROUP)" = "false" ]; then
@@ -50,6 +55,7 @@ jobs:
             echo "✅ Resource group already exists."
           fi
 
+      # ✅ 6. Terraform Plan with fallback for VM sizes
       - name: Terraform Plan with VM Size Fallback
         id: plan
         run: |
@@ -57,7 +63,7 @@ jobs:
           PLAN_SUCCESS=false
           for size in $VM_SIZES; do
             echo "💻 Trying VM size: $size"
-            terraform plan -no-color -out=tfplan \
+            terraform -chdir=$TF_WORKING_DIR plan -no-color -out=tfplan \
               -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
               -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
               -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
@@ -71,20 +77,22 @@ jobs:
             exit 1
           fi
 
-      - name: Terraform Apply (Safe Import)
+      # ✅ 7. Terraform Apply (Safe RG Import)
+      - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: |
           echo "🚀 Applying Terraform plan..."
-          if terraform state list | grep -q "azurerm_resource_group.main"; then
+          if terraform -chdir=$TF_WORKING_DIR state list | grep -q "azurerm_resource_group.main"; then
             echo "✔️ RG already tracked by Terraform."
           else
             echo "📦 Importing existing RG..."
-            terraform import \
+            terraform -chdir=$TF_WORKING_DIR import \
               azurerm_resource_group.main \
               "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
           fi
 
-          terraform apply -auto-approve tfplan
+          terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
 
+      # ✅ 8. Show Outputs
       - name: Show Outputs
-        run: terraform output -no-color
+        run: terraform -chdir=$TF_WORKING_DIR output -no-color
