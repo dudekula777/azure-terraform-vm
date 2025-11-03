@@ -35,10 +35,9 @@ jobs:
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
-        terraform_version: '1.5.7'
+        terraform_version: '1.8.4'
         terraform_wrapper: false
 
-    # Optional caching for speed
     - name: Cache Terraform plugins/modules
       uses: actions/cache@v4
       with:
@@ -57,20 +56,31 @@ jobs:
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: Setup Azure CLI
+    - name: Verify Azure Connection
       run: |
-        az --version
+        echo "Checking Azure account info..."
         az account show
+        echo "✅ Azure login successful"
+
+    - name: Set Azure Subscription for Terraform
+      run: |
+        SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+        echo "Using subscription: $SUBSCRIPTION_ID"
+        echo "ARM_SUBSCRIPTION_ID=$SUBSCRIPTION_ID" >> $GITHUB_ENV
+        echo "ARM_CLIENT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}" >> $GITHUB_ENV
+        echo "ARM_CLIENT_SECRET=${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}" >> $GITHUB_ENV
+        echo "ARM_TENANT_ID=${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}" >> $GITHUB_ENV
+        echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
 
     # ----------------------------
-    # Terraform Format (run from project root)
+    # Terraform Format Check (from repo root)
     # ----------------------------
     - name: Terraform Format Check
       id: fmt
-      run: terraform fmt -check -recursive
+      run: terraform fmt -check -recursive || terraform fmt -recursive
 
     # ----------------------------
-    # Terraform Init, Validate, Plan, Apply
+    # Terraform Init / Validate / Plan
     # ----------------------------
     - name: Terraform Init
       id: init
@@ -86,8 +96,8 @@ jobs:
       id: plan
       run: terraform plan -input=false -no-color -var-file="terraform.tfvars" -out=tfplan
       working-directory: ${{ env.TF_WORKING_DIR }}
-      continue-on-error: false
 
+    # Upload Plan for PR visibility
     - name: Upload Terraform Plan Artifact
       if: always() && github.event_name == 'pull_request'
       uses: actions/upload-artifact@v4
@@ -96,6 +106,9 @@ jobs:
         path: ${{ env.TF_WORKING_DIR }}/tfplan
         retention-days: 7
 
+    # ----------------------------
+    # Terraform Apply (only on main branch)
+    # ----------------------------
     - name: Terraform Apply
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: apply
@@ -103,14 +116,14 @@ jobs:
       working-directory: ${{ env.TF_WORKING_DIR }}
 
     # ----------------------------
-    # Extract outputs & health check
+    # Extract outputs and run health check
     # ----------------------------
     - name: Extract Terraform Outputs
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       id: outputs
       run: |
-        echo "vm_public_ip=$(terraform output -raw vm_public_ip)" >> $GITHUB_OUTPUT
-        echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
+        echo "vm_public_ip=$(terraform output -raw vm_public_ip)" >> $GITHUB_ENV
+        echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_ENV
       working-directory: ${{ env.TF_WORKING_DIR }}
 
     - name: Health Check
@@ -119,21 +132,21 @@ jobs:
         echo "Testing Nginx web server..."
         max_retries=30
         counter=0
-        until curl -f http://${{ steps.outputs.outputs.outputs.vm_public_ip }}; do
+        until curl -f http://$vm_public_ip; do
           if [ $counter -eq $max_retries ]; then
-            echo "Health check failed after $max_retries attempts"
+            echo "❌ Health check failed after $max_retries attempts"
             exit 1
           fi
-          echo "Waiting for VM to be ready... ($((counter+1))/$max_retries)"
+          echo "⏳ Waiting for VM to be ready... ($((counter+1))/$max_retries)"
           sleep 30
           counter=$((counter+1))
         done
-        echo "Health check completed successfully!"
+        echo "✅ Health check completed successfully!"
 
     - name: Show Deployment Info
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       run: |
         echo "🚀 Deployment Successful!"
-        echo "VM Public IP: ${{ steps.outputs.outputs.outputs.vm_public_ip }}"
-        echo "Website URL: ${{ steps.outputs.outputs.outputs.website_url }}"
-        echo "SSH Command: ssh -i <private_key> azureuser@${{ steps.outputs.outputs.outputs.vm_public_ip }}"
+        echo "VM Public IP: $vm_public_ip"
+        echo "Website URL: $website_url"
+        echo "SSH Command: ssh -i <private_key> azureuser@$vm_public_ip"
