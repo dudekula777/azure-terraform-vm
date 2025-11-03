@@ -1,12 +1,10 @@
-name: Terraform Azure VM Deployment (OIDC)
+name: Terraform Azure VM Deployment (Dev Environment)
 
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
   pull_request:
-    branches:
-      - main
+    branches: [ "main" ]
 
 permissions:
   id-token: write
@@ -14,51 +12,42 @@ permissions:
 
 jobs:
   terraform:
-    name: Deploy Azure VM with Terraform
+    name: Provision Azure VM (Dev)
     runs-on: ubuntu-latest
 
     env:
       TF_WORKING_DIR: ./environments/dev
       AZURE_RESOURCE_GROUP: rg-dev-vm
+      VM_NAME: dev-vm-instance
 
     steps:
-      - name: Checkout Code
+      # ✅ Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ✅ Correct OIDC-based Azure Login (for GitHub Actions)
+      # ✅ Azure Login using OIDC
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          auth-type: SERVICE_PRINCIPAL     # ✅ Correct for OIDC in GitHub Actions
-          enable-AzPSSession: false
-          audience: api://AzureADTokenExchange
 
+      # ✅ Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.5
 
+      # ✅ Terraform Init
       - name: Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
-      - name: Check and Import Existing Resource Group
-        run: |
-          echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists..."
-          if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
-            echo "✅ Resource Group exists. Importing into Terraform state..."
-            terraform -chdir=$TF_WORKING_DIR import \
-              azurerm_resource_group.main \
-              "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
-          else
-            echo "ℹ️ Resource Group not found. Terraform will create it."
-          fi
-
+      # ✅ Terraform Validate
       - name: Terraform Validate
         run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
+      # ✅ Terraform Plan
       - name: Terraform Plan
         run: |
           terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
@@ -67,6 +56,7 @@ jobs:
             -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
             -var-file="terraform.tfvars" -out=tfplan
 
+      # ✅ Terraform Apply
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
