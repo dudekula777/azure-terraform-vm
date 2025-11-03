@@ -1,4 +1,4 @@
-name: Terraform Deploy Azure VM
+name: 'Terraform Deploy Azure VM'
 
 on:
   push:
@@ -9,9 +9,9 @@ env:
 
 jobs:
   terraform:
-    name: Terraform - prod
+    name: 'Terraform - prod'
     runs-on: ubuntu-latest
-    environment: "prod"
+    environment: prod
 
     steps:
       # Checkout repository
@@ -30,34 +30,27 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      # Initialize Terraform
+      # Terraform Init
       - name: Terraform Init
-        run: |
-          cd environments/prod
-          terraform init -reconfigure -backend-config=backend.config
+        run: terraform init -reconfigure -backend-config=backend.config
 
-      # Validate Terraform
+      # Terraform Validate
       - name: Terraform Validate
-        run: |
-          cd environments/prod
-          terraform validate
+        run: terraform validate
 
-      # Terraform Plan (for visibility)
+      # Terraform Plan
       - name: Terraform Plan
-        run: |
-          cd environments/prod
-          terraform plan -var-file="terraform.tfvars"
+        run: terraform plan -var-file="terraform.tfvars"
 
-      # Terraform Apply (auto-approve)
+      # Terraform Apply
       - name: Terraform Apply
-        run: |
-          cd environments/prod
-          terraform apply -auto-approve -var-file="terraform.tfvars"
+        if: github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve -var-file="terraform.tfvars"
 
       # Upload SSH Key Artifact
       - name: Upload SSH Key Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ssh-key-${{ github.sha }}
-          path: environments/prod/azure_vm_key.pem
+          path: azure_vm_key.pem
           retention-days: 1
