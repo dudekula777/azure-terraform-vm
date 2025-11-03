@@ -1,5 +1,5 @@
 resource_group_name = "rg-dev-vm"
-location            = "East US"
+location            = "centralus"
 prefix              = "dev"
 vm_size             = "Standard_B1s"
 admin_username      = "azureuser"
