@@ -19,6 +19,10 @@ jobs:
       TF_WORKING_DIR: ./environments/dev
       AZURE_RESOURCE_GROUP: rg-dev-vm
       VM_NAME: dev-vm-instance
+      VNET_NAME: vnet-dev
+      SUBNET_NAME: subnet-dev
+      PUBLIC_IP_NAME: pip-dev
+      NIC_NAME: nic-dev
       LOCATION: eastus
 
     steps:
@@ -45,28 +49,64 @@ jobs:
       - name: Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
-      # ✅ Import Existing Resources if Present
+      # ✅ Import Existing Azure Resources (if any)
       - name: Import Existing Azure Resources
         run: |
           echo "🔍 Checking for existing Azure resources..."
 
           # --- Resource Group ---
           if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
-            echo "✅ Resource Group exists. Importing into Terraform state..."
+            echo "✅ Resource Group exists. Importing..."
             terraform -chdir=$TF_WORKING_DIR import \
               azurerm_resource_group.main \
               "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
           else
-            echo "ℹ️ Resource Group not found. It will be created by Terraform."
+            echo "ℹ️ Resource Group not found. Will be created."
+          fi
+
+          # --- Virtual Network ---
+          VNET_ID=$(az network vnet show -g $AZURE_RESOURCE_GROUP -n $VNET_NAME --query id -o tsv 2>/dev/null || true)
+          if [ -n "$VNET_ID" ]; then
+            echo "✅ VNet exists. Importing..."
+            terraform -chdir=$TF_WORKING_DIR import azurerm_virtual_network.main "$VNET_ID" || true
+          else
+            echo "ℹ️ VNet not found. Will be created."
+          fi
+
+          # --- Subnet ---
+          SUBNET_ID=$(az network vnet subnet show -g $AZURE_RESOURCE_GROUP --vnet-name $VNET_NAME -n $SUBNET_NAME --query id -o tsv 2>/dev/null || true)
+          if [ -n "$SUBNET_ID" ]; then
+            echo "✅ Subnet exists. Importing..."
+            terraform -chdir=$TF_WORKING_DIR import azurerm_subnet.main "$SUBNET_ID" || true
+          else
+            echo "ℹ️ Subnet not found. Will be created."
+          fi
+
+          # --- Public IP ---
+          PIP_ID=$(az network public-ip show -g $AZURE_RESOURCE_GROUP -n $PUBLIC_IP_NAME --query id -o tsv 2>/dev/null || true)
+          if [ -n "$PIP_ID" ]; then
+            echo "✅ Public IP exists. Importing..."
+            terraform -chdir=$TF_WORKING_DIR import azurerm_public_ip.main "$PIP_ID" || true
+          else
+            echo "ℹ️ Public IP not found. Will be created."
+          fi
+
+          # --- Network Interface ---
+          NIC_ID=$(az network nic show -g $AZURE_RESOURCE_GROUP -n $NIC_NAME --query id -o tsv 2>/dev/null || true)
+          if [ -n "$NIC_ID" ]; then
+            echo "✅ NIC exists. Importing..."
+            terraform -chdir=$TF_WORKING_DIR import azurerm_network_interface.main "$NIC_ID" || true
+          else
+            echo "ℹ️ NIC not found. Will be created."
           fi
 
           # --- Virtual Machine ---
-          VM_ID=$(az vm show --name $VM_NAME --resource-group $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} --query id -o tsv 2>/dev/null || true)
+          VM_ID=$(az vm show -g $AZURE_RESOURCE_GROUP -n $VM_NAME --query id -o tsv 2>/dev/null || true)
           if [ -n "$VM_ID" ]; then
-            echo "✅ VM '$VM_NAME' exists. Importing into Terraform state..."
+            echo "✅ VM exists. Importing..."
             terraform -chdir=$TF_WORKING_DIR import azurerm_linux_virtual_machine.main "$VM_ID" || true
           else
-            echo "ℹ️ VM not found. It will be created by Terraform."
+            echo "ℹ️ VM not found. Will be created."
           fi
 
       # ✅ Terraform Validate
