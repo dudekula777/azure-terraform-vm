@@ -2,8 +2,6 @@ name: Terraform Deploy Azure VM
 
 on:
   push:
-    branches: [ main, develop ]
-  pull_request:
     branches: [ main ]
 
 env:
@@ -11,12 +9,9 @@ env:
 
 jobs:
   terraform:
-    # 👇 Job name with valid expression syntax
-    name: Terraform - ${{ github.ref == 'refs/heads/main' ? 'prod' : 'dev' }}
+    name: Terraform - prod
     runs-on: ubuntu-latest
-
-    # 👇 Define environment correctly (quoted expression)
-    environment: "${{ github.ref == 'refs/heads/main' ? 'prod' : 'dev' }}"
+    environment: "prod"
 
     steps:
       # Checkout repository
@@ -38,53 +33,31 @@ jobs:
       # Initialize Terraform
       - name: Terraform Init
         run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            cd environments/prod
-          else
-            cd environments/dev
-          fi
-          terraform init
+          cd environments/prod
+          terraform init -reconfigure -backend-config=backend.config
 
       # Validate Terraform
       - name: Terraform Validate
         run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            cd environments/prod
-          else
-            cd environments/dev
-          fi
+          cd environments/prod
           terraform validate
 
-      # Plan for PRs
+      # Terraform Plan (for visibility)
       - name: Terraform Plan
-        if: github.event_name == 'pull_request'
         run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            cd environments/prod
-          else
-            cd environments/dev
-          fi
+          cd environments/prod
           terraform plan -var-file="terraform.tfvars"
 
-      # Apply for main branch
-      - name: Terraform Apply (prod)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      # Terraform Apply (auto-approve)
+      - name: Terraform Apply
         run: |
           cd environments/prod
           terraform apply -auto-approve -var-file="terraform.tfvars"
 
-      # Apply for develop branch
-      - name: Terraform Apply (dev)
-        if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
-        run: |
-          cd environments/dev
-          terraform apply -auto-approve -var-file="terraform.tfvars"
-
       # Upload SSH Key Artifact
       - name: Upload SSH Key Artifact
-        if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: ssh-key-${{ github.sha }}
-          path: environments/*/azure_vm_key.pem
+          path: environments/prod/azure_vm_key.pem
           retention-days: 1
