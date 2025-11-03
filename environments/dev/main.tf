@@ -15,6 +15,7 @@ provider "azurerm" {
   client_id       = var.client_id
   client_secret   = var.client_secret
 }
+
 provider "tls" {}
 
 # Local variables
@@ -25,6 +26,7 @@ locals {
     ManagedBy   = "terraform"
   }
 }
+
 # Import-friendly resource group
 resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
@@ -46,13 +48,14 @@ resource "azurerm_subnet" "subnet" {
   address_prefixes     = ["10.0.1.0/24"]
 }
 
-# Public IP
+# Public IP - Using Standard SKU to avoid limits
 resource "azurerm_public_ip" "public_ip" {
   name                = "${var.vm_name}-pip"
   location            = var.location
   resource_group_name = azurerm_resource_group.main.name
-  allocation_method   = "Dynamic"
-  sku                 = "Basic"
+  allocation_method   = "Static"  # Static required for Standard SKU
+  sku                 = "Standard" # Changed to Standard SKU
+  zones               = ["1"]     # Specify zone for Standard SKU
 }
 
 # Network interface
@@ -81,10 +84,10 @@ resource "azurerm_network_security_group" "nsg" {
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
-    source_port_range           = "*"
-    destination_port_range      = "80"
-    source_address_prefix       = "*"
-    destination_address_prefix  = "*"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
   }
 
   security_rule {
@@ -93,10 +96,10 @@ resource "azurerm_network_security_group" "nsg" {
     direction                  = "Inbound"
     access                     = "Allow"
     protocol                   = "Tcp"
-    source_port_range           = "*"
-    destination_port_range      = "22"
-    source_address_prefix       = "*"
-    destination_address_prefix  = "*"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
   }
 }
 
@@ -111,13 +114,14 @@ resource "tls_private_key" "vm_ssh" {
   rsa_bits  = 4096
 }
 
-# VM
+# VM - Updated to support Standard SKU Public IP
 resource "azurerm_linux_virtual_machine" "vm" {
   name                = var.vm_name
   location            = var.location
   resource_group_name = azurerm_resource_group.main.name
   size                = var.vm_size
   admin_username      = "azureuser"
+  zone                = "1"  # Match the Public IP zone
 
   network_interface_ids = [azurerm_network_interface.nic.id]
 
@@ -147,8 +151,26 @@ sudo systemctl start nginx
 echo "<h1>Welcome to Dev VM with NGINX 🚀</h1>" | sudo tee /var/www/html/index.html
 EOF
   )
+
+  tags = local.common_tags
 }
 
 output "public_ip" {
   value = azurerm_public_ip.public_ip.ip_address
+}
+
+output "vm_name" {
+  value = azurerm_linux_virtual_machine.vm.name
+}
+
+output "resource_group_name" {
+  value = azurerm_resource_group.main.name
+}
+
+output "location" {
+  value = var.location
+}
+
+output "website_url" {
+  value = "http://${azurerm_public_ip.public_ip.ip_address}"
 }
