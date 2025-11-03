@@ -11,9 +11,6 @@ variable "resource_group_name" {
 variable "vm_name" {
   default = "dev-vm-instance"
 }
-variable "vm_size" {
-  default = "Standard_B1s"
-}
 
 
 variable "prefix" {

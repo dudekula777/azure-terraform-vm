@@ -56,7 +56,16 @@ jobs:
           fi
 
       - name: 🚀 Terraform Apply
-        run: terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan -parallelism=2 -lock-timeout=5m
+        run: |
+          echo "🚀 Applying Terraform plan..."
+          terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan -parallelism=2 -lock-timeout=5m
 
-      - name: 🌐 Show Public IP
-        run: terraform -chdir=$TF_WORKING_DIR output public_ip
+      - name: 🌐 Get Public IP
+        id: output
+        run: |
+          echo "public_ip=$(terraform -chdir=$TF_WORKING_DIR output -raw vm_public_ip)" >> $GITHUB_ENV
+
+      - name: 🌍 Show Deployed Nginx URL
+        run: |
+          echo "✅ Nginx is deployed successfully!"
+          echo "🌐 Access it at: http://$public_ip"
