@@ -36,50 +36,42 @@ jobs:
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
-      # ✅ 3. Ensure and Import Resource Group
+      # ✅ 3. Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      # ✅ 4. Terraform Init (required before import)
+      - name: Terraform Init
+        run: terraform -chdir=$TF_WORKING_DIR init -input=false
+
+      # ✅ 5. Ensure and Import Resource Group
       - name: Ensure and Import Resource Group
         run: |
           echo "🔍 Checking if resource group '$AZURE_RESOURCE_GROUP' exists in Azure..."
           if az group show --name $AZURE_RESOURCE_GROUP >/dev/null 2>&1; then
             echo "✅ Resource group exists."
             if terraform -chdir=$TF_WORKING_DIR state list | grep -q "azurerm_resource_group.main"; then
-              echo "✔️ RG already managed by Terraform — skipping import."
+              echo "✔️ RG already tracked by Terraform — skipping import."
             else
               echo "📦 Importing existing RG into Terraform state..."
-              terraform -chdir=$TF_WORKING_DIR init -input=false
               terraform -chdir=$TF_WORKING_DIR import \
                 azurerm_resource_group.main \
                 "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
             fi
           else
-            echo "🆕 Resource group not found — creating..."
+            echo "🆕 RG not found — creating new one..."
             az group create --name $AZURE_RESOURCE_GROUP --location $LOCATION
           fi
 
-      # ✅ 4. Setup Terraform
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.5
+      # ✅ 6. Terraform Validate
+      - name: Terraform Validate
+        run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
-      # ✅ 5. Cache Terraform dependencies
-      - name: Cache Terraform Dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.TF_WORKING_DIR }}/.terraform
-            ${{ env.TF_WORKING_DIR }}/.terraform.lock.hcl
-          key: terraform-${{ hashFiles('**/*.tf') }}
-
-      # ✅ 6. Terraform Init & Validate
-      - name: Terraform Init & Validate
-        run: |
-          terraform -chdir=$TF_WORKING_DIR init -input=false
-          terraform -chdir=$TF_WORKING_DIR validate -no-color
-
-      # ✅ 7. Terraform Plan with VM Fallback Logic
-      - name: Terraform Plan with VM Fallback
-        id: plan_vm
+      # ✅ 7. Terraform Plan (with dynamic region + size fallback)
+      - name: Terraform Plan (Auto Retry)
+        id: plan_dynamic
         run: |
           PLAN_SUCCESS=false
           for size in $VM_SIZES; do
@@ -92,11 +84,11 @@ jobs:
               -var "location=$LOCATION" \
               -var "vm_size=$size" \
               -var-file="terraform.tfvars" -out=tfplan && PLAN_SUCCESS=true && break
-            echo "⚠️ Failed for size $size. Trying next..."
+            echo "⚠️ Failed for $size — trying next..."
           done
-          
+
           if [ "$PLAN_SUCCESS" = false ]; then
-            echo "❌ All VM sizes failed. Exiting."
+            echo "❌ No suitable VM SKU available in $LOCATION"
             exit 1
           fi
 
@@ -107,7 +99,7 @@ jobs:
           echo "🚀 Applying Terraform plan..."
           terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
 
-      # ✅ 9. Terraform Output
+      # ✅ 9. Terraform Outputs
       - name: Terraform Outputs
         if: success()
         run: terraform -chdir=$TF_WORKING_DIR output -no-color
