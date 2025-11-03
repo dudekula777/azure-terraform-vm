@@ -36,23 +36,13 @@ jobs:
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
-      # ✅ 3. Ensure Resource Group Exists
-      - name: Ensure RG Exists
-        run: |
-          if [ "$(az group exists --name $AZURE_RESOURCE_GROUP)" = "false" ]; then
-            echo "🆕 Creating Resource Group..."
-            az group create --name $AZURE_RESOURCE_GROUP --location eastus
-          else
-            echo "✅ Resource Group already exists."
-          fi
-
-      # ✅ 4. Setup Terraform
+      # ✅ 3. Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.5
 
-      # ✅ 5. Cache Terraform Dependencies
+      # ✅ 4. Cache Terraform Dependencies
       - name: Cache Terraform Dependencies
         uses: actions/cache@v4
         with:
@@ -61,13 +51,33 @@ jobs:
             ${{ env.TF_WORKING_DIR }}/.terraform.lock.hcl
           key: terraform-${{ hashFiles('**/*.tf') }}
 
-      # ✅ 6. Terraform Init & Validate
+      # ✅ 5. Terraform Init & Validate
       - name: Terraform Init & Validate
         run: |
           terraform -chdir=$TF_WORKING_DIR init -input=false
           terraform -chdir=$TF_WORKING_DIR validate -no-color
 
-      # ✅ 7. Dynamic Plan with Region + VM Fallback
+      # ✅ 6. Ensure Resource Group Exists & Import if Needed
+      - name: Ensure and Import Resource Group
+        run: |
+          echo "🔍 Checking if resource group '$AZURE_RESOURCE_GROUP' exists in Azure..."
+          if az group show --name $AZURE_RESOURCE_GROUP >/dev/null 2>&1; then
+            echo "✅ Resource group exists in Azure."
+            echo "🧩 Checking if it's already tracked in Terraform state..."
+            if terraform -chdir=$TF_WORKING_DIR state list | grep -q "azurerm_resource_group.main"; then
+              echo "✔️ RG already in Terraform state — skipping import."
+            else
+              echo "📦 Importing existing RG into Terraform state..."
+              terraform -chdir=$TF_WORKING_DIR import \
+                azurerm_resource_group.main \
+                "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
+            fi
+          else
+            echo "🆕 RG does not exist — creating new one."
+            az group create --name $AZURE_RESOURCE_GROUP --location eastus
+          fi
+
+      # ✅ 7. Terraform Dynamic Plan with Region & SKU fallback
       - name: Terraform Dynamic Plan (Auto Retry)
         id: plan_dynamic
         run: |
@@ -83,7 +93,7 @@ jobs:
                 -var "location=$region" \
                 -var "vm_size=$size" \
                 -var-file="terraform.tfvars" -out=tfplan && PLAN_SUCCESS=true && break 2
-              echo "⚠️ Failed for $region / $size. Retrying with next combination..."
+              echo "⚠️ Failed for $region / $size. Retrying..."
             done
           done
           
@@ -92,14 +102,14 @@ jobs:
             exit 1
           fi
 
-      # ✅ 8. Terraform Apply (main branch only)
+      # ✅ 8. Terraform Apply (only for main branch)
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: |
           echo "🚀 Applying Terraform plan..."
           terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
 
-      # ✅ 9. Terraform Output
+      # ✅ 9. Terraform Outputs
       - name: Terraform Outputs
         if: success()
         run: terraform -chdir=$TF_WORKING_DIR output -no-color
