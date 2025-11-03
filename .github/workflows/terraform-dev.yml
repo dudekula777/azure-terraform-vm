@@ -5,6 +5,7 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -19,6 +20,10 @@ jobs:
       TF_WORKING_DIR: ./environments/dev
       AZURE_RESOURCE_GROUP: rg-dev-vm
       VM_NAME: dev-vm-instance
+      DEFAULT_REGION: eastus
+      FALLBACK_REGION: centralus
+      DEFAULT_VM_SIZE: Standard_B2s
+      FALLBACK_VM_SIZE: Standard_B1s
 
     steps:
       # ✅ 1. Checkout Code
@@ -40,8 +45,8 @@ jobs:
         with:
           terraform_version: 1.9.5
 
-      # ✅ 4. Cache Terraform dependencies
-      - name: Cache Terraform State and Plugins
+      # ✅ 4. Cache Terraform plugins
+      - name: Cache Terraform Dependencies
         uses: actions/cache@v4
         with:
           path: |
@@ -53,23 +58,21 @@ jobs:
       - name: Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
-      # ✅ 6. Import Existing Resource Group only if not in state
+      # ✅ 6. Import Existing Resource Group (if not managed)
       - name: Import Existing Azure Resource Group (if not already managed)
         run: |
           echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists in Terraform state..."
           
-          # Check if resource is already in Terraform state
           if terraform -chdir=$TF_WORKING_DIR state list | grep -q "azurerm_resource_group.main"; then
             echo "✅ Resource Group already managed by Terraform. Skipping import."
           else
-            echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists in Azure..."
             if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
-              echo "✅ Resource Group exists in Azure. Importing into Terraform state..."
+              echo "✅ Resource Group exists in Azure. Importing..."
               terraform -chdir=$TF_WORKING_DIR import \
                 azurerm_resource_group.main \
                 "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
             else
-              echo "ℹ️ Resource Group not found in Azure. Terraform will create it."
+              echo "ℹ️ Resource Group not found. Terraform will create it."
             fi
           fi
 
@@ -77,17 +80,43 @@ jobs:
       - name: Terraform Validate
         run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
-      # ✅ 8. Terraform Plan
-      - name: Terraform Plan
+      # ✅ 8. Terraform Plan (with fallback logic)
+      - name: Terraform Plan with Fallback
+        id: tf_plan
+        continue-on-error: true
         run: |
+          echo "🚀 Starting Terraform plan in region: $DEFAULT_REGION with size: $DEFAULT_VM_SIZE"
           terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
             -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
             -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
             -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
             -var "client_secret=${{ secrets.ARM_CLIENT_SECRET }}" \
+            -var "location=$DEFAULT_REGION" \
+            -var "vm_size=$DEFAULT_VM_SIZE" \
+            -var-file="terraform.tfvars" -out=tfplan || echo "PLAN_FAILED=true" >> $GITHUB_ENV
+
+      # ✅ 9. Retry Plan (if SKU not available)
+      - name: Retry Plan in Fallback Region/Size
+        if: env.PLAN_FAILED == 'true'
+        run: |
+          echo "⚠️ Primary region or SKU unavailable. Retrying with fallback..."
+          terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
+            -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
+            -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
+            -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
+            -var "client_secret=${{ secrets.ARM_CLIENT_SECRET }}" \
+            -var "location=$FALLBACK_REGION" \
+            -var "vm_size=$FALLBACK_VM_SIZE" \
             -var-file="terraform.tfvars" -out=tfplan
 
-      # ✅ 9. Terraform Apply (Only on main branch)
+      # ✅ 10. Terraform Apply (main branch only)
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
-        run: terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
+        run: |
+          echo "🚀 Applying Terraform plan..."
+          terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
+
+      # ✅ 11. Output VM Info
+      - name: Terraform Outputs
+        if: success()
+        run: terraform -chdir=$TF_WORKING_DIR output -no-color
