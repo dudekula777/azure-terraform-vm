@@ -1,12 +1,8 @@
 #cloud-config
 package_update: true
-package_upgrade: true
-
 packages:
   - nginx
-
 runcmd:
   - systemctl enable nginx
   - systemctl start nginx
-  - echo "<h1>🚀 Welcome to your Azure VM with NGINX!</h1>" > /var/www/html/index.html
-  - echo "Server is running and managed by Terraform." >> /var/www/html/index.html
+  - echo "<h1>Welcome to Azure VM managed by Terraform & GitHub Actions 🚀</h1>" > /var/www/html/index.html
