@@ -1,0 +1,119 @@
+name: 'Terraform Dev Environment'
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+
+env:
+  TF_WORKING_DIR: './environments/dev'
+  AZURE_RESOURCE_GROUP: 'rg-dev-vm'
+
+jobs:
+  terraform:
+    name: 'Terraform Plan & Apply'
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: '1.5.7'
+        terraform_wrapper: false
+
+    - name: Configure Azure credentials
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Setup Azure CLI
+      run: |
+        az --version
+        az account show
+
+    - name: Terraform Format Check
+      id: fmt
+      run: |
+        terraform fmt -check -recursive
+      working-directory: ${{ env.TF_WORKING_DIR }}
+
+    - name: Terraform Init
+      id: init
+      run: |
+        terraform init -input=false
+      working-directory: ${{ env.TF_WORKING_DIR }}
+
+    - name: Terraform Validate
+      id: validate
+      run: |
+        terraform validate -no-color
+      working-directory: ${{ env.TF_WORKING_DIR }}
+
+    - name: Terraform Plan
+      id: plan
+      run: |
+        terraform plan -input=false -no-color -var-file="terraform.tfvars"
+      working-directory: ${{ env.TF_WORKING_DIR }}
+      continue-on-error: false
+
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      id: apply
+      run: |
+        terraform apply -auto-approve -input=false -var-file="terraform.tfvars"
+      working-directory: ${{ env.TF_WORKING_DIR }}
+
+    - name: Extract Terraform Outputs
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      id: outputs
+      run: |
+        echo "vm_public_ip=$(terraform output -raw vm_public_ip)" >> $GITHUB_OUTPUT
+        echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
+      working-directory: ${{ env.TF_WORKING_DIR }}
+
+    - name: Health Check
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        echo "Testing Nginx web server..."
+        max_retries=30
+        counter=0
+        until curl -f http://${{ steps.outputs.vm_public_ip }}; do
+          if [ $counter -eq $max_retries ]; then
+            echo "Health check failed after $max_retries attempts"
+            exit 1
+          fi
+          echo "Waiting for VM to be ready... ($((counter+1))/$max_retries)"
+          sleep 30
+          counter=$((counter+1))
+        done
+        echo "Health check completed successfully!"
+
+    - name: Show Deployment Info
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        echo "🚀 Deployment Successful!"
+        echo "VM Public IP: ${{ steps.outputs.vm_public_ip }}"
+        echo "Website URL: ${{ steps.outputs.website_url }}"
+        echo "SSH Command: ssh -i <private_key> azureuser@${{ steps.outputs.vm_public_ip }}"
+
+    - name: Upload Terraform Plan Artifact
+      if: always() && github.event_name == 'pull_request'
+      uses: actions/upload-artifact@v4
+      with:
+        name: terraform-plan
+        path: ${{ env.TF_WORKING_DIR }}/terraform.tfplan
+        retention-days: 7
