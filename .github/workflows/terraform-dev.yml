@@ -19,18 +19,13 @@ jobs:
       TF_WORKING_DIR: ./environments/dev
       AZURE_RESOURCE_GROUP: rg-dev-vm
       VM_NAME: dev-vm-instance
-      VNET_NAME: vnet-dev
-      SUBNET_NAME: subnet-dev
-      PUBLIC_IP_NAME: pip-dev
-      NIC_NAME: nic-dev
-      LOCATION: eastus
 
     steps:
-      # ✅ Checkout Code
+      # ✅ 1. Checkout Code
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ✅ Azure Login using OIDC
+      # ✅ 2. Azure Login (OIDC)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -39,81 +34,50 @@ jobs:
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
           enable-AzPSSession: false
 
-      # ✅ Setup Terraform
+      # ✅ 3. Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.5
 
-      # ✅ Terraform Init
+      # ✅ 4. Cache Terraform dependencies
+      - name: Cache Terraform State and Plugins
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.TF_WORKING_DIR }}/.terraform
+            ${{ env.TF_WORKING_DIR }}/.terraform.lock.hcl
+          key: terraform-${{ hashFiles('**/*.tf') }}
+
+      # ✅ 5. Terraform Init
       - name: Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
-      # ✅ Import Existing Azure Resources (if any)
-      - name: Import Existing Azure Resources
+      # ✅ 6. Import Existing Resource Group only if not in state
+      - name: Import Existing Azure Resource Group (if not already managed)
         run: |
-          echo "🔍 Checking for existing Azure resources..."
-
-          # --- Resource Group ---
-          if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
-            echo "✅ Resource Group exists. Importing..."
-            terraform -chdir=$TF_WORKING_DIR import \
-              azurerm_resource_group.main \
-              "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
+          echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists in Terraform state..."
+          
+          # Check if resource is already in Terraform state
+          if terraform -chdir=$TF_WORKING_DIR state list | grep -q "azurerm_resource_group.main"; then
+            echo "✅ Resource Group already managed by Terraform. Skipping import."
           else
-            echo "ℹ️ Resource Group not found. Will be created."
+            echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists in Azure..."
+            if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
+              echo "✅ Resource Group exists in Azure. Importing into Terraform state..."
+              terraform -chdir=$TF_WORKING_DIR import \
+                azurerm_resource_group.main \
+                "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
+            else
+              echo "ℹ️ Resource Group not found in Azure. Terraform will create it."
+            fi
           fi
 
-          # --- Virtual Network ---
-          VNET_ID=$(az network vnet show -g $AZURE_RESOURCE_GROUP -n $VNET_NAME --query id -o tsv 2>/dev/null || true)
-          if [ -n "$VNET_ID" ]; then
-            echo "✅ VNet exists. Importing..."
-            terraform -chdir=$TF_WORKING_DIR import azurerm_virtual_network.main "$VNET_ID" || true
-          else
-            echo "ℹ️ VNet not found. Will be created."
-          fi
-
-          # --- Subnet ---
-          SUBNET_ID=$(az network vnet subnet show -g $AZURE_RESOURCE_GROUP --vnet-name $VNET_NAME -n $SUBNET_NAME --query id -o tsv 2>/dev/null || true)
-          if [ -n "$SUBNET_ID" ]; then
-            echo "✅ Subnet exists. Importing..."
-            terraform -chdir=$TF_WORKING_DIR import azurerm_subnet.main "$SUBNET_ID" || true
-          else
-            echo "ℹ️ Subnet not found. Will be created."
-          fi
-
-          # --- Public IP ---
-          PIP_ID=$(az network public-ip show -g $AZURE_RESOURCE_GROUP -n $PUBLIC_IP_NAME --query id -o tsv 2>/dev/null || true)
-          if [ -n "$PIP_ID" ]; then
-            echo "✅ Public IP exists. Importing..."
-            terraform -chdir=$TF_WORKING_DIR import azurerm_public_ip.main "$PIP_ID" || true
-          else
-            echo "ℹ️ Public IP not found. Will be created."
-          fi
-
-          # --- Network Interface ---
-          NIC_ID=$(az network nic show -g $AZURE_RESOURCE_GROUP -n $NIC_NAME --query id -o tsv 2>/dev/null || true)
-          if [ -n "$NIC_ID" ]; then
-            echo "✅ NIC exists. Importing..."
-            terraform -chdir=$TF_WORKING_DIR import azurerm_network_interface.main "$NIC_ID" || true
-          else
-            echo "ℹ️ NIC not found. Will be created."
-          fi
-
-          # --- Virtual Machine ---
-          VM_ID=$(az vm show -g $AZURE_RESOURCE_GROUP -n $VM_NAME --query id -o tsv 2>/dev/null || true)
-          if [ -n "$VM_ID" ]; then
-            echo "✅ VM exists. Importing..."
-            terraform -chdir=$TF_WORKING_DIR import azurerm_linux_virtual_machine.main "$VM_ID" || true
-          else
-            echo "ℹ️ VM not found. Will be created."
-          fi
-
-      # ✅ Terraform Validate
+      # ✅ 7. Terraform Validate
       - name: Terraform Validate
         run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
-      # ✅ Terraform Plan
+      # ✅ 8. Terraform Plan
       - name: Terraform Plan
         run: |
           terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
@@ -123,7 +87,7 @@ jobs:
             -var "client_secret=${{ secrets.ARM_CLIENT_SECRET }}" \
             -var-file="terraform.tfvars" -out=tfplan
 
-      # ✅ Terraform Apply (Only on Main)
+      # ✅ 9. Terraform Apply (Only on main branch)
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
