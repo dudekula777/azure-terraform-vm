@@ -7,6 +7,10 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: read
+
 env:
   TF_WORKING_DIR: './environments/dev'
   AZURE_RESOURCE_GROUP: 'rg-dev-vm'
@@ -79,7 +83,22 @@ jobs:
             -var-file="terraform.tfvars" -out=tfplan
         working-directory: ${{ env.TF_WORKING_DIR }}
 
-      # Step 9: Terraform Apply (only for main branch)
+      # 🟢 Step 9: Import Resource Group if it already exists
+      - name: Import Existing Resource Group (if needed)
+        run: |
+          set +e
+          echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists..."
+          az group show --name $AZURE_RESOURCE_GROUP --subscription $ARM_SUBSCRIPTION_ID > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "✅ Resource Group exists. Importing into Terraform state..."
+            terraform import azurerm_resource_group.main "/subscriptions/$ARM_SUBSCRIPTION_ID/resourceGroups/$AZURE_RESOURCE_GROUP" || true
+          else
+            echo "ℹ️ Resource Group not found. Terraform will create it."
+          fi
+          set -e
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      # Step 10: Terraform Apply (only for main branch)
       - name: Terraform Apply (main branch only)
         if: github.ref == 'refs/heads/main'
         run: |
