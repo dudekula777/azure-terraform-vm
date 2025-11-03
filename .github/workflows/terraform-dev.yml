@@ -81,7 +81,7 @@ jobs:
       # ✅ Create terraform.tfvars with Standard SKU configuration
       - name: 📄 Create terraform.tfvars
         run: |
-          cat > ${{ env.TF_WORKING_DIR }}/terraform.tfvars << EOF
+          cat > ${{ env.TF_WORKING_DIR }}/terraform.tfvars << 'EOF'
 # Infrastructure configuration
 location = "${{ env.SELECTED_REGION }}"
 resource_group_name = "${{ env.AZURE_RESOURCE_GROUP }}-${{ env.SELECTED_REGION }}"
