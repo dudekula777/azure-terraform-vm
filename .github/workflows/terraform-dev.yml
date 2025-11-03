@@ -8,7 +8,6 @@ on:
     branches:
       - main
 
-# ✅ Required for OIDC authentication
 permissions:
   id-token: write
   contents: read
@@ -23,31 +22,28 @@ jobs:
       AZURE_RESOURCE_GROUP: rg-dev-vm
 
     steps:
-      # ✅ Checkout repository
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ✅ Azure Login using Federated Identity (OIDC)
+      # ✅ Correct OIDC-based Azure Login (for GitHub Actions)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          auth-type: IDENTITY        # ✅ This is the correct OIDC mode
-          enable-AzPSSession: false  # optional, for faster login
+          auth-type: SERVICE_PRINCIPAL     # ✅ Correct for OIDC in GitHub Actions
+          enable-AzPSSession: false
+          audience: api://AzureADTokenExchange
 
-      # ✅ Setup Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.5
 
-      # ✅ Terraform Init
       - name: Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
-      # ✅ Check & Import Existing Resource Group
       - name: Check and Import Existing Resource Group
         run: |
           echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists..."
@@ -60,11 +56,9 @@ jobs:
             echo "ℹ️ Resource Group not found. Terraform will create it."
           fi
 
-      # ✅ Terraform Validate
       - name: Terraform Validate
         run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
-      # ✅ Terraform Plan
       - name: Terraform Plan
         run: |
           terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
@@ -73,7 +67,6 @@ jobs:
             -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
             -var-file="terraform.tfvars" -out=tfplan
 
-      # ✅ Terraform Apply (only on main branch)
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
