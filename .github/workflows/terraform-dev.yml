@@ -8,7 +8,7 @@ on:
     branches:
       - main
 
-# ✅ Required for OIDC-based Azure authentication
+# ✅ Required for OIDC authentication
 permissions:
   id-token: write
   contents: read
@@ -27,14 +27,15 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ✅ Azure Login using OIDC
+      # ✅ Azure Login using Federated Identity (OIDC)
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          enable-AzPSSession: false  # optional
+          auth-type: IDENTITY        # ✅ This is the correct OIDC mode
+          enable-AzPSSession: false  # optional, for faster login
 
       # ✅ Setup Terraform
       - name: Setup Terraform
