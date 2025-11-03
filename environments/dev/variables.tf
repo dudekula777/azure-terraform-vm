@@ -1,47 +1,49 @@
-variable "subscription_id" {}
-variable "tenant_id" {}
-variable "client_id" {}
-variable "client_secret" {}
-variable "location" {
-  default = "centralus"
-}
-variable "resource_group_name" {
-  default = "rg-dev-vm"
-}
-variable "vm_name" {
-  default = "dev-vm-instance"
-}
-
-
-variable "prefix" {
-  description = "Prefix for resource names"
+# Azure authentication variables
+variable "subscription_id" {
+  description = "Azure Subscription ID"
   type        = string
-  default     = "dev"
+  sensitive   = true
+}
+
+variable "client_id" {
+  description = "Azure Client ID"
+  type        = string
+  sensitive   = true
+}
+
+variable "client_secret" {
+  description = "Azure Client Secret"
+  type        = string
+  sensitive   = true
+}
+
+variable "tenant_id" {
+  description = "Azure Tenant ID"
+  type        = string
+  sensitive   = true
+}
+
+# Infrastructure variables
+variable "location" {
+  description = "Azure region"
+  type        = string
+  default     = "centralus"
+}
+
+variable "resource_group_name" {
+  description = "Name of the resource group"
+  type        = string
+  default     = "rg-dev-vm"
+}
+
+variable "vm_name" {
+  description = "Name of the virtual machine"
+  type        = string
+  default     = "dev-vm-instance"
 }
 
 variable "vm_size" {
-  description = "VM size"
+  description = "Size of the virtual machine"
   type        = string
   default     = "Standard_B1s"
-}
-
-variable "admin_username" {
-  description = "Admin username"
-  type        = string
-  default     = "azureuser"
-  validation {
-    condition     = length(var.admin_username) >= 3 && length(var.admin_username) <= 24
-    error_message = "Admin username must be between 3 and 24 characters."
-  }
-}
-
-variable "tags" {
-  description = "Tags for resources"
-  type        = map(string)
-  default = {
-    Environment = "dev"
-    Project     = "terraform-vm"
-    ManagedBy   = "terraform"
-    Owner       = "devops-team"
-  }
 }

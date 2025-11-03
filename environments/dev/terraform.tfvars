@@ -1,12 +1,11 @@
+location           = "centralus"
 resource_group_name = "rg-dev-vm"
-location            = "centralus"
-prefix              = "dev"
-vm_size             = "Standard_B1s"
-admin_username      = "azureuser"
+prefix             = "dev"
+vm_size            = "Standard_B1s"
+admin_username     = "azureuser"
 
 tags = {
-  Environment = "development"
+  Environment = "dev"
   Project     = "azure-vm-terraform"
-  Team        = "devops"
-  CostCenter  = "12345"
+  ManagedBy   = "github-actions"
 }
