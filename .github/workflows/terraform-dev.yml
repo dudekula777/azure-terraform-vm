@@ -23,21 +23,19 @@ jobs:
       DEFAULT_REGION: eastus
       FALLBACK_REGION: centralus
       DEFAULT_VM_SIZE: Standard_B2s
-      FALLBACK_VM_SIZE: Standard_B1s
 
     steps:
-      # ✅ 1. Checkout Code
+      # ✅ 1. Checkout
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # ✅ 2. Azure Login (OIDC)
+      # ✅ 2. Azure Login via OIDC
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.ARM_CLIENT_ID }}
           tenant-id: ${{ secrets.ARM_TENANT_ID }}
           subscription-id: ${{ secrets.ARM_SUBSCRIPTION_ID }}
-          enable-AzPSSession: false
 
       # ✅ 3. Setup Terraform
       - name: Setup Terraform
@@ -58,21 +56,16 @@ jobs:
       - name: Terraform Init
         run: terraform -chdir=$TF_WORKING_DIR init -input=false
 
-      # ✅ 6. Import Existing Resource Group (if not managed)
-      - name: Import Existing Azure Resource Group (if not already managed)
+      # ✅ 6. Import RG if not in state
+      - name: Import Existing RG if Needed
         run: |
-          echo "🔍 Checking if Resource Group '${AZURE_RESOURCE_GROUP}' exists in Terraform state..."
-          
           if terraform -chdir=$TF_WORKING_DIR state list | grep -q "azurerm_resource_group.main"; then
-            echo "✅ Resource Group already managed by Terraform. Skipping import."
+            echo "✅ Resource Group already managed by Terraform."
           else
-            if az group show --name $AZURE_RESOURCE_GROUP --subscription ${{ secrets.ARM_SUBSCRIPTION_ID }} >/dev/null 2>&1; then
-              echo "✅ Resource Group exists in Azure. Importing..."
+            if az group show --name $AZURE_RESOURCE_GROUP >/dev/null 2>&1; then
+              echo "🔄 Importing existing Resource Group..."
               terraform -chdir=$TF_WORKING_DIR import \
-                azurerm_resource_group.main \
-                "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
-            else
-              echo "ℹ️ Resource Group not found. Terraform will create it."
+                azurerm_resource_group.main "/subscriptions/${{ secrets.ARM_SUBSCRIPTION_ID }}/resourceGroups/${AZURE_RESOURCE_GROUP}" || true
             fi
           fi
 
@@ -80,13 +73,13 @@ jobs:
       - name: Terraform Validate
         run: terraform -chdir=$TF_WORKING_DIR validate -no-color
 
-      # ✅ 8. Terraform Plan (with fallback logic)
-      - name: Terraform Plan with Fallback
+      # ✅ 8. Terraform Plan
+      - name: Terraform Plan
         id: tf_plan
         continue-on-error: true
         run: |
-          echo "🚀 Starting Terraform plan in region: $DEFAULT_REGION with size: $DEFAULT_VM_SIZE"
-          terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
+          echo "🚀 Running Terraform Plan for region $DEFAULT_REGION and VM size $DEFAULT_VM_SIZE"
+          terraform -chdir=$TF_WORKING_DIR plan -input=false \
             -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
             -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
             -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
@@ -95,18 +88,23 @@ jobs:
             -var "vm_size=$DEFAULT_VM_SIZE" \
             -var-file="terraform.tfvars" -out=tfplan || echo "PLAN_FAILED=true" >> $GITHUB_ENV
 
-      # ✅ 9. Retry Plan (if SKU not available)
-      - name: Retry Plan in Fallback Region/Size
+      # ✅ 9. Detect and Retry if SKU Not Available
+      - name: Detect and Retry in Alternate Region
         if: env.PLAN_FAILED == 'true'
         run: |
-          echo "⚠️ Primary region or SKU unavailable. Retrying with fallback..."
-          terraform -chdir=$TF_WORKING_DIR plan -input=false -no-color \
+          echo "⚠️ Terraform plan failed — checking for available VM SKUs in region $DEFAULT_REGION"
+
+          echo "🔍 Checking available VM sizes in $DEFAULT_REGION..."
+          az vm list-sizes --location $DEFAULT_REGION --query "[?numberOfCores<=2].name" -o tsv | head -n 5
+
+          echo "⚙️ Retrying Terraform Plan in fallback region: $FALLBACK_REGION"
+          terraform -chdir=$TF_WORKING_DIR plan -input=false \
             -var "subscription_id=${{ secrets.ARM_SUBSCRIPTION_ID }}" \
             -var "tenant_id=${{ secrets.ARM_TENANT_ID }}" \
             -var "client_id=${{ secrets.ARM_CLIENT_ID }}" \
             -var "client_secret=${{ secrets.ARM_CLIENT_SECRET }}" \
             -var "location=$FALLBACK_REGION" \
-            -var "vm_size=$FALLBACK_VM_SIZE" \
+            -var "vm_size=Standard_B1s" \
             -var-file="terraform.tfvars" -out=tfplan
 
       # ✅ 10. Terraform Apply (main branch only)
@@ -116,7 +114,7 @@ jobs:
           echo "🚀 Applying Terraform plan..."
           terraform -chdir=$TF_WORKING_DIR apply -auto-approve tfplan
 
-      # ✅ 11. Output VM Info
+      # ✅ 11. Terraform Output
       - name: Terraform Outputs
         if: success()
         run: terraform -chdir=$TF_WORKING_DIR output -no-color
