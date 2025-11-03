@@ -29,39 +29,57 @@ jobs:
         with:
           terraform_version: 1.7.5
 
-      # ✅ Secure OIDC-based login (no client secret required)
-      - name: 🔐 Azure Login (OIDC)
-        uses: azure/login@v2
+      # ✅ Secure OIDC-based login (requires client secret for service principal)
+      - name: 🔐 Azure Login (Service Principal)
+        uses: azure/login@v1
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          enable-AzPSSession: false
+
+      - name: 🔍 Verify Azure Login
+        run: |
+          echo "✅ Logged into Azure subscription:"
+          az account show --query name -o tsv
+          echo "📋 Available locations:"
+          az account list-locations --query "[?metadata.regionType=='Physical'].{Name:name, DisplayName:displayName}" -o table
 
       # ✅ Initialize Terraform
       - name: ⚙️ Terraform Init
-        run: terraform -chdir=$TF_WORKING_DIR init -upgrade
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} init -upgrade -input=false
 
       # ✅ Validate configuration
       - name: 🧪 Terraform Validate
-        run: terraform -chdir=$TF_WORKING_DIR validate
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} validate -no-color
+
+      # ✅ Format check
+      - name: 📝 Terraform Format Check
+        run: terraform -chdir=${{ env.TF_WORKING_DIR }} fmt -check -recursive
 
       # ✅ Plan with retry logic (tries alternate VM sizes)
       - name: 🧭 Terraform Plan (Dynamic VM Size)
+        id: plan
         run: |
           set -e
-          cd $TF_WORKING_DIR
+          cd ${{ env.TF_WORKING_DIR }}
           PLAN_SUCCESS=false
-          for size in $VM_SIZES; do
+          
+          for size in ${{ env.VM_SIZES }}; do
             echo "💻 Trying VM size: $size"
-            terraform plan -no-color -out=tfplan \
-              -var "subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
-              -var "tenant_id=${{ secrets.AZURE_TENANT_ID }}" \
-              -var "client_id=${{ secrets.AZURE_CLIENT_ID }}" \
-              -var "location=$LOCATION" \
-              -var "vm_size=$size" && PLAN_SUCCESS=true && break
+            if terraform plan -no-color -out=tfplan \
+              -var "location=${{ env.LOCATION }}" \
+              -var "vm_size=$size" \
+              -var "resource_group_name=${{ env.AZURE_RESOURCE_GROUP }}" \
+              -var "prefix=dev"; then
+              echo "✅ Plan successful with VM size: $size"
+              PLAN_SUCCESS=true
+              break
+            else
+              echo "⚠️  Plan failed with VM size: $size, trying next..."
+            fi
           done
+          
           if [ "$PLAN_SUCCESS" = false ]; then
-            echo "❌ No suitable VM size found."
+            echo "❌ No suitable VM size found from: ${{ env.VM_SIZES }}"
             exit 1
           fi
 
@@ -69,13 +87,76 @@ jobs:
       - name: 🚀 Terraform Apply
         run: |
           echo "🚀 Applying Terraform plan..."
-          terraform -chdir=$TF_WORKING_DIR apply -auto-approve "tfplan"
+          terraform -chdir=${{ env.TF_WORKING_DIR }} apply -auto-approve -input=false "tfplan"
+
+      # ✅ Get Terraform outputs
+      - name: 📤 Get Outputs
+        id: outputs
+        run: |
+          cd ${{ env.TF_WORKING_DIR }}
+          echo "vm_public_ip=$(terraform output -raw vm_public_ip)" >> $GITHUB_OUTPUT
+          echo "website_url=$(terraform output -raw website_url)" >> $GITHUB_OUTPUT
+          echo "resource_group=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+
+      # ✅ Health check - verify Nginx is running
+      - name: 🩺 Health Check
+        run: |
+          echo "🔍 Running health checks..."
+          MAX_RETRIES=12
+          COUNTER=0
+          
+          until curl -f -s -o /dev/null -w "HTTP Status: %{http_code}\n" http://${{ steps.outputs.vm_public_ip }}; do
+            if [ $COUNTER -eq $MAX_RETRIES ]; then
+              echo "❌ Health check failed after $MAX_RETRIES attempts"
+              exit 1
+            fi
+            echo "⏳ Waiting for VM to be ready... ($((COUNTER+1))/$MAX_RETRIES)"
+            sleep 30
+            COUNTER=$((COUNTER+1))
+          done
+          
+          echo "✅ Health check passed! Nginx is responding."
 
       # ✅ Display outputs (Public IP + Nginx URL)
-      - name: 🌐 Show Public IP & Website URL
+      - name: 🌐 Show Deployment Info
         run: |
-          cd $TF_WORKING_DIR
-          echo "🌍 Public IP:"
-          terraform output -raw vm_public_ip
-          echo "🔗 Website URL:"
-          terraform output -raw website_url
+          echo "🎉 Deployment Successful!"
+          echo "========================"
+          echo "🌍 Public IP: ${{ steps.outputs.vm_public_ip }}"
+          echo "🔗 Website URL: ${{ steps.outputs.website_url }}"
+          echo "📦 Resource Group: ${{ steps.outputs.resource_group }}"
+          echo "⚡ SSH Command: ssh azureuser@${{ steps.outputs.vm_public_ip }}"
+          echo "🔍 Test Command: curl http://${{ steps.outputs.vm_public_ip }}"
+
+      # ✅ Create deployment summary
+      - name: 📋 Create Deployment Summary
+        if: always()
+        run: |
+          echo "## 🚀 Terraform Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Deployment Details:**" >> $GITHUB_STEP_SUMMARY
+            echo "- 🌐 **Website URL**: [${{ steps.outputs.website_url }}](${{ steps.outputs.website_url }})" >> $GITHUB_STEP_SUMMARY
+            echo "- 🔗 **Public IP**: ${{ steps.outputs.vm_public_ip }}" >> $GITHUB_STEP_SUMMARY
+            echo "- 📦 **Resource Group**: ${{ steps.outputs.resource_group }}" >> $GITHUB_STEP_SUMMARY
+            echo "- ⚡ **SSH Command**: \`ssh azureuser@${{ steps.outputs.vm_public_ip }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- 🔍 **Test Command**: \`curl http://${{ steps.outputs.vm_public_ip }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+            echo "1. Open [${{ steps.outputs.website_url }}](${{ steps.outputs.website_url }}) in your browser" >> $GITHUB_STEP_SUMMARY
+            echo "2. Test SSH access: \`ssh azureuser@${{ steps.outputs.vm_public_ip }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "3. Verify Nginx is running correctly" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check the workflow logs for detailed error information." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow Information:**" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔄 **Trigger**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎯 **Branch**: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 🏃 **Runner**: ${{ runner.os }}" >> $GITHUB_STEP_SUMMARY
